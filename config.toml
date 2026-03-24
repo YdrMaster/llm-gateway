@@ -1,0 +1,29 @@
+﻿# 表示这是一个输入节点
+[input.service]
+# 输入节点将打开一个指定的端口
+port = 8000
+# 输入节点的后继是模型节点，根据协议中的 `model` 字段路由到指定名字的后继
+models = ["qwen3.5-35b-a3b", "qwen3.5-122b-a10b", "kimi-k2.5"]
+
+# 这是一个虚节点
+[node.qwen3.5-35b-a3b]
+# 虚节点路由策略是顺序尝试，尝试的顺序如下
+sequence = ["sglang-qwen3.5-35b-a3b", "aliyun"]
+
+# 这是一个虚节点
+[node.qwen3.5-122b-a10b]
+# 虚节点路由策略是顺序尝试，尝试的顺序如下
+sequence = ["sglang-qwen3.5-122b-a10b", "aliyun"]
+
+# 这是一些简单后端节点，它们只指定了 base-url，直接转发所有协议，不进行协议转换
+[backend]
+sglang-qwen3.5-35b-a3b = "http://172.17.250.163:30001"
+sglang-qwen3.5-122b-a10b = "http://172.17.250.163:30002"
+sglang-kimi-k2.5 = "http://172.17.250.176:30001"
+
+# 这是一个后端节点
+[backend.aliyun]
+# 它指定了特定协议的 base-url，非此协议的负载需要进行协议转换
+base-url = { anthropic = "https://dashscope.aliyuncs.com/apps/anthropic" }
+# 通过这个节点访问后端时会替换负载中的 api-key
+api-key = "$ALIYUN_API_KEY"

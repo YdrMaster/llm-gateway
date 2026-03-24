@@ -7,3 +7,4 @@ edition = "2024"
 
 [dependencies]
 llm-gateway-protocols.path = "crates/protocols"
+llm-gateway-config.path = "crates/config"
