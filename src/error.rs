@@ -37,9 +37,9 @@ mod tests {
     #[test]
     fn test_error_display() {
         let err = GatewayError::UnknownProtocol;
-        assert_eq!(format!("{}", err), "Unknown protocol");
+        assert_eq!(format!("{err}"), "Unknown protocol");
 
         let err = GatewayError::ModelNotFound("gpt-4".to_string());
-        assert_eq!(format!("{}", err), "Model not found: gpt-4");
+        assert_eq!(format!("{err}"), "Model not found: gpt-4");
     }
 }

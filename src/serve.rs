@@ -1,4 +1,6 @@
-﻿use crate::{Backend, GatewayError, InputNode, Node, Route, RouteError, RoutePayload};
+use crate::{
+    Backend, GatewayError, InputNode, Node, Route, RouteError, RoutePayload, StatsStoreManager,
+};
 use http::header::{ALLOW, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use http::{HeaderName, Method, StatusCode, Uri};
 use http_body_util::BodyExt;
@@ -18,6 +20,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use std::{fmt::Write, sync::Arc};
 use tokio::net::TcpListener;
 
@@ -25,7 +28,10 @@ type BoxBody = http_body_util::combinators::BoxBody<Bytes, GatewayError>;
 type HttpsClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
 
 /// 运行 HTTP 服务器
-pub async fn serve(input_node: &Arc<InputNode>) -> Result<(), GatewayError> {
+pub async fn serve(
+    input_node: &Arc<InputNode>,
+    stats: Option<Arc<StatsStoreManager>>,
+) -> Result<(), GatewayError> {
     let addr = SocketAddr::from(([0, 0, 0, 0], input_node.port));
     let listener = TcpListener::bind(addr).await?;
     let client = client();
@@ -38,12 +44,14 @@ pub async fn serve(input_node: &Arc<InputNode>) -> Result<(), GatewayError> {
 
         let node = input_node.clone();
         let client = client.clone();
+        let stats = stats.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
             let service = service_fn(move |req| {
                 let node = node.clone();
                 let client = client.clone();
-                async move { handle_request(req, &node, client).await }
+                let stats = stats.clone();
+                async move { handle_request(remote_addr, req, &node, client, stats).await }
             });
 
             if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
@@ -93,9 +101,11 @@ fn method_not_allowed(allow: Method) -> Response<BoxBody> {
 
 /// 处理单个 HTTP 请求
 async fn handle_request(
+    remote_addr: SocketAddr,
     req: Request<hyper::body::Incoming>,
     input_node: &Arc<InputNode>,
     client: HttpsClient,
+    stats: Option<Arc<StatsStoreManager>>,
 ) -> Result<Response<BoxBody>, GatewayError> {
     // 处理 /v1/models 端点 (GET only)
     if req.uri().path() == "/v1/models" {
@@ -109,39 +119,116 @@ async fn handle_request(
         return Ok(method_not_allowed(Method::POST));
     }
 
+    let start_time = Instant::now();
     let payload = RoutePayload::new(req).await?;
     match input_node.route(&payload) {
         Ok(Route { mut nodes, backend }) => {
             // 日志记录路由成功路径
             nodes.push(input_node.clone());
-            let mut path = String::new();
+            let mut path_str = String::new();
             for node in nodes.iter().rev() {
-                path.push_str(node.name());
-                path.push_str("->");
+                path_str.push_str(node.name());
+                path_str.push_str("->");
             }
-            let path = path.strip_suffix("->").unwrap();
-            log::info!("Routing path: {path}");
 
-            if payload.protocol() == backend.protocol {
+            let routing_path = path_str.strip_suffix("->").unwrap_or(&path_str);
+            log::info!("Routing path: {routing_path}");
+
+            let method = payload.parts.method.clone();
+            let path = payload.parts.uri.path().to_string();
+            let response = if payload.protocol() == backend.protocol {
                 forward_to_backend(payload, backend, client).await
             } else {
                 forward_to_foreign(payload, backend, client).await
+            };
+
+            // 记录成功事件
+            if let Some(stats) = stats {
+                let duration_ms = start_time.elapsed().as_millis();
+                let model = nodes
+                    .iter()
+                    .rev()
+                    .nth(1)
+                    .map(|n| n.name())
+                    .unwrap_or("unknown");
+                let backend_name = nodes.first().map(|n| n.name()).unwrap_or("unknown");
+                let event = crate::RoutingEvent::builder(timestamp_ms(), input_node.port)
+                    .remote_addr(remote_addr)
+                    .method(method.as_str())
+                    .path(&path)
+                    .model(model)
+                    .routing_path(routing_path)
+                    .backend(backend_name)
+                    .success(response.is_ok())
+                    .duration_ms(duration_ms.min(i64::MAX as u128) as i64)
+                    .build();
+                // 异步记录，不阻塞请求
+                let stats_clone = stats.clone();
+                tokio::spawn(async move {
+                    // 通过通道异步写入，不会阻塞
+                    if let Err(e) = stats_clone.record_event(event).await {
+                        log::warn!("Failed to record stats event: {e}");
+                    }
+                });
+            }
+
+            response
+        }
+        Err(e) => {
+            // 记录失败事件
+            if let Some(stats) = stats {
+                let duration_ms = start_time.elapsed().as_millis();
+                let model = payload
+                    .body
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("missing field");
+                let event = crate::RoutingEvent::builder(timestamp_ms(), input_node.port)
+                    .remote_addr(remote_addr)
+                    .method(payload.parts.method.as_str())
+                    .path(payload.parts.uri.path())
+                    .model(model)
+                    .routing_path("")
+                    .backend("")
+                    .success(false)
+                    .duration_ms(duration_ms.min(i64::MAX as u128) as i64)
+                    .error_type(match &e {
+                        RouteError::NoAvailable => "NoAvailable",
+                    })
+                    .build();
+
+                let stats_clone = stats.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = stats_clone.record_event(event).await {
+                        log::warn!("Failed to record stats event: {e}");
+                    }
+                });
+            }
+
+            match e {
+                RouteError::NoAvailable => {
+                    log::warn!("No available backend for this model");
+                    Ok(Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .body(
+                            Full::<Bytes>::from("No available backend for this model")
+                                .map_err(|_| GatewayError::NoAvailableBackend)
+                                .boxed(),
+                        )
+                        .unwrap())
+                }
             }
         }
-        Err(e) => match e {
-            RouteError::NoAvailable => {
-                log::warn!("No available backend for this model");
-                Ok(Response::builder()
-                    .status(StatusCode::SERVICE_UNAVAILABLE)
-                    .body(
-                        Full::<Bytes>::from("No available backend for this model")
-                            .map_err(|_| GatewayError::NoAvailableBackend)
-                            .boxed(),
-                    )
-                    .unwrap())
-            }
-        },
     }
+}
+
+/// 获取当前毫秒级时间戳
+fn timestamp_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 /// 处理 /v1/models 请求

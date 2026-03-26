@@ -27,11 +27,11 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::ParseError(msg) => write!(f, "TOML 解析错误：{msg}"),
+            Error::ParseError(msg) => write!(f, "TOML parse error: {msg}"),
             Error::MissingField(field, path) => {
-                write!(f, "缺少必需字段 '{field}': [{path}]")
+                write!(f, "Missing required field '{field}': [{path}]")
             }
-            Error::DuplicateName(name) => write!(f, "重复的节点名称：{name}"),
+            Error::DuplicateName(name) => write!(f, "Duplicate node name: {name}"),
         }
     }
 }

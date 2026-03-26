@@ -71,6 +71,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc};
 #[derive(Clone, Debug)]
 pub struct GatewayConfig {
     pub nodes: HashMap<Arc<str>, Node>,
+    pub statistics: Option<llm_gateway_statistics::StatisticsConfig>,
 }
 
 impl FromStr for GatewayConfig {
@@ -85,10 +86,16 @@ impl FromStr for GatewayConfig {
         let Some(root_table) = parsed.as_table() else {
             return Ok(GatewayConfig {
                 nodes: HashMap::new(),
+                statistics: None,
             });
         };
 
-        let mut nodes = HashMap::new();
+        // ============================================
+        // 解析统计配置 [statistics]
+        // ============================================
+        let statistics = parse_statistics_config(root_table);
+
+        let mut nodes: HashMap<Arc<str>, Node> = HashMap::new();
 
         // ============================================
         // 解析输入节点 [input.*]
@@ -204,7 +211,7 @@ impl FromStr for GatewayConfig {
                             BaseUrl::Multi(map)
                         } else {
                             return Err(ConfigParseError::ParseError(
-                                "base-url 必须是字符串或表".to_string(),
+                                "base-url must be a string or table".to_string(),
                             ));
                         }
                     } else {
@@ -228,8 +235,23 @@ impl FromStr for GatewayConfig {
             }
         }
 
-        Ok(GatewayConfig { nodes })
+        Ok(GatewayConfig { nodes, statistics })
     }
+}
+
+/// 解析统计配置
+fn parse_statistics_config(
+    root_table: &toml::Table,
+) -> Option<llm_gateway_statistics::StatisticsConfig> {
+    root_table
+        .get("statistics")
+        .and_then(|v| v.as_table())
+        .and_then(|table| {
+            // 将 TOML 表转换为字符串
+            let toml_str = toml::to_string(table).ok()?;
+            // 使用 serde 反序列化
+            toml::from_str(&toml_str).ok()
+        })
 }
 
 #[cfg(test)]

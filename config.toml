@@ -26,3 +26,23 @@ sequence = ["sglang-qwen3.5-122b-a10b", "aliyun"]
 base-url = { anthropic = "https://dashscope.aliyuncs.com/apps/anthropic" }
 # 通过这个节点访问后端时会替换负载中的 api-key
 api-key = "$ALIYUN_API_KEY"
+
+# ============================================
+# 统计配置
+# ============================================
+[statistics]
+# 是否启用统计（默认 true）
+enabled = true
+# 数据库文件路径（默认 "stats.db"）
+db-path = "stats.db"
+# 数据保留天数（默认 30）
+retention-days = 7
+
+# 聚合配置
+[statistics.aggregation]
+# 窗口大小列表（秒）：5 分钟，15 分钟，1 小时，1 天
+window-sizes = [300, 900, 3600, 86400]
+# 默认聚合粒度（秒）
+default-window = 3600
+# 是否自动预计算
+auto-aggregate = true

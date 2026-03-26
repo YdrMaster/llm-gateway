@@ -19,6 +19,12 @@ pub use error::GatewayError;
 pub use input_node::InputNode;
 pub use serve::serve;
 
+// 统计模块重新导出
+pub use llm_gateway_statistics::{
+    AggQuery, AggStats, EventFilter, RoutingEvent, StatisticsConfig, StatsQueryBuilder,
+    StatsStoreManager, TimeGranularity,
+};
+
 use crate::{backend_node::BackendNode, sequence_node::SequenceNode};
 
 /// 路由负载 - 在路由图中流动的请求上下文

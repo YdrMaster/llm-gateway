@@ -6,8 +6,9 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
-llm-gateway-protocols.path = "crates/protocols"
 llm-gateway-config.path = "crates/config"
+llm-gateway-protocols.path = "crates/protocols"
+llm-gateway-statistics.path = "crates/statistics"
 
 serde = "1.0"
 serde_json = "1.0"

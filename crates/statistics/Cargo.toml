@@ -1,0 +1,19 @@
+[package]
+name = "llm-gateway-statistics"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1.50", features = [
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "macros",
+] }
+thiserror = "1.0"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3.0"
