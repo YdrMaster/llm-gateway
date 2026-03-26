@@ -1,6 +1,6 @@
 ﻿use crate::{Backend, GatewayError, InputNode, Node, Route, RouteError, RoutePayload};
-use http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
-use http::{HeaderName, StatusCode, Uri};
+use http::header::{ALLOW, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
+use http::{HeaderName, Method, StatusCode, Uri};
 use http_body_util::BodyExt;
 use http_body_util::Full;
 use hyper::body::{Bytes, Frame, Incoming};
@@ -11,9 +11,11 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioIo;
 use llm_gateway_protocols::streaming::{self, StreamingCollector};
 use llm_gateway_protocols::{Protocol, SseCollector, SseMessage, request};
+use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::env;
+use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fmt::Write, sync::Arc};
@@ -24,8 +26,6 @@ type HttpsClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
 
 /// 运行 HTTP 服务器
 pub async fn serve(input_node: &Arc<InputNode>) -> Result<(), GatewayError> {
-    use std::net::SocketAddr;
-
     let addr = SocketAddr::from(([0, 0, 0, 0], input_node.port));
     let listener = TcpListener::bind(addr).await?;
     let client = client();
@@ -78,12 +78,37 @@ fn env_key(key: &str) -> Cow<'_, str> {
         .unwrap_or(Cow::Borrowed(key))
 }
 
+fn method_not_allowed(allow: Method) -> Response<BoxBody> {
+    let allow = allow.as_str();
+    Response::builder()
+        .status(StatusCode::METHOD_NOT_ALLOWED)
+        .header(ALLOW, allow)
+        .body(
+            Full::<Bytes>::from(format!("Method not allowed. Use {allow}."))
+                .map_err(|_| GatewayError::NoAvailableBackend)
+                .boxed(),
+        )
+        .unwrap()
+}
+
 /// 处理单个 HTTP 请求
 async fn handle_request(
     req: Request<hyper::body::Incoming>,
     input_node: &InputNode,
     client: HttpsClient,
 ) -> Result<Response<BoxBody>, GatewayError> {
+    // 处理 /v1/models 端点 (GET only)
+    if req.uri().path() == "/v1/models" {
+        return if req.method() != Method::GET {
+            Ok(method_not_allowed(Method::GET))
+        } else {
+            handle_models_request(input_node).await
+        };
+    }
+    if req.method() != Method::POST {
+        return Ok(method_not_allowed(Method::POST));
+    }
+
     let payload = RoutePayload::new(req).await?;
     match input_node.route(&payload) {
         Ok(Route { mut nodes, backend }) => {
@@ -112,6 +137,39 @@ async fn handle_request(
             }
         },
     }
+}
+
+/// 处理 /v1/models 请求
+async fn handle_models_request(input_node: &InputNode) -> Result<Response<BoxBody>, GatewayError> {
+    let models: Vec<Value> = input_node
+        .models
+        .read()
+        .unwrap()
+        .keys()
+        .map(|name| {
+            json!({
+                "id": name.as_ref(),
+                "object": "model",
+                "created": 0,
+                "owned_by": "llm-gateway"
+            })
+        })
+        .collect();
+
+    let response = json!({
+        "object": "list",
+        "data": models
+    });
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(
+            Full::<Bytes>::from(response.to_string())
+                .map_err(|_| GatewayError::NoAvailableBackend)
+                .boxed(),
+        )
+        .unwrap())
 }
 
 const X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
