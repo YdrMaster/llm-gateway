@@ -1,6 +1,6 @@
 mod logger;
 
-use llm_gateway::build;
+use llm_gateway::{build, serve};
 use llm_gateway_config::GatewayConfig;
 use log::warn;
 use std::{env, fs};
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut set = JoinSet::new();
             for input in inputs {
                 set.spawn(async move {
-                    if let Err(e) = input.run().await {
+                    if let Err(e) = serve(&input).await {
                         warn!("input node stopped: {e}")
                     }
                 });

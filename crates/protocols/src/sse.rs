@@ -161,13 +161,13 @@ impl SseCollector {
         };
 
         for line in message.lines() {
-            if let Some(data) = line.strip_prefix("data: ") {
+            if let Some(data) = line.strip_prefix("data:") {
                 if !ans.data.is_empty() {
                     ans.data.push('\n')
                 }
-                ans.data.push_str(data)
-            } else if let Some(event) = line.strip_prefix("event: ") {
-                ans.event = Some(event.into())
+                ans.data.push_str(data.trim())
+            } else if let Some(event) = line.strip_prefix("event:") {
+                ans.event = Some(event.trim().into())
             } else if line.is_empty() {
                 // Empty line, ignore
             } else if line.starts_with(':') {

@@ -13,9 +13,11 @@ mod backend_node;
 mod error;
 mod input_node;
 mod sequence_node;
+mod serve;
 
 pub use error::GatewayError;
 pub use input_node::InputNode;
+pub use serve::serve;
 
 use crate::{backend_node::BackendNode, sequence_node::SequenceNode};
 

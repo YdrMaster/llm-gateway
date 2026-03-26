@@ -20,6 +20,7 @@ hyper-util = { version = "0.1", features = [
     "server",
     "client-legacy",
 ] }
+hyper-rustls = { version = "0.27", features = ["http1", "rustls-native-certs"] }
 
 http = "1"
 http-body-util = "0.1"

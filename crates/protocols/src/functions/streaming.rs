@@ -337,6 +337,7 @@ impl StreamingCollector for AnthropicToOpenai {
             .ok_or_else(|| ProtocolError::InvalidStreamEvent("Event missing type".to_string()))?;
 
         match event_type {
+            "ping" => Ok(None),
             "message_start" => self.handle_message_start(obj),
             "content_block_start" => self.handle_content_block_start(obj),
             "content_block_delta" => self.handle_content_block_delta(obj),
