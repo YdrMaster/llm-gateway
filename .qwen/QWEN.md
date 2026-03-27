@@ -2,10 +2,18 @@
 
 ## Markdown 写作规范
 
-1. 遵循 markdownlint 规则
-2. 注意 MD060 表格列样式（表格列对齐）
-3. 使用严格等宽字体排版，中文（全角）字符显示宽度为 2 个英文（半角）字符，Markdown 表格按此标准对齐
-4. 不要在标题之前加 --- 分隔线
+- 遵循 markdownlint 规则
+- 注意 MD060 表格列样式（表格列对齐）
+- 使用严格等宽字体排版，中文（全角）字符显示宽度为 2 个英文（半角）字符，Markdown 表格按此标准对齐
+- 不要在标题之前加 --- 分隔线，例如：
+
+  ```markdown, 禁止这样写
+  some content.
+
+  ---
+
+  ## any title
+  ```
 
 ## Rust struct 可见性设计原则
 
@@ -18,10 +26,14 @@
    - 包含复杂逻辑或对字段状态有要求的方法
    - 通过方法访问，避免外部代码意外修改字段状态导致异常
 
-## Rust 开发规范
+## Rust 开发规范即风格
 
 1. **使用 Rust skills** - 开发 Rust 代码时应使用 rust-router 等相关技能
-2. **验证** - 依次执行 `cargo fmt`、`cargo check`、`cargo clippy` 和 `cargo test`，其中 clippy 必须解决所有非 unused 类的警告，除非在 TDD 阶段，否则 test 必须全部通过
+2. **文本语言** 所有**注释和文档**使用中文，所有超过一行的函数必须有 `///` 文档，所有会输出到控制台或日志的文本使用英文
+3. **文档提醒** 模块级文档使用 `//!`，代码结构文档使用 `///`，普通注释使用 `//`
+4. **内联格式串** 格式串应该尽量使用内联形式，例如 `"{x}"`，而不是 `"{}", x`
+5. **代码简洁** 使用简洁的代码，省略所有可推导的类型标注，省略所有不必要的省略号
+6. **验证** - 依次执行 `cargo fmt`、`cargo check`、`cargo clippy` 和 `cargo test`，其中 clippy 必须解决所有非 unused 类的警告，除非在 TDD 阶段，否则 test 必须全部通过
 
 ## Git 提交规范
 
@@ -46,59 +58,3 @@
        ↓
 5. 重构优化
 ```
-
-## 项目结构
-
-```text
-rustllm-gateway/
-├── Cargo.toml              # Workspace 根
-├── crates/
-│   ├── gateway-protocol/   # 协议定义
-│   ├── gateway-core/       # 核心路由逻辑
-│   ├── gateway-adapters/   # 后端适配器
-│   ├── gateway-metrics/    # 指标收集
-│   ├── gateway-config/     # 配置管理
-│   └── gateway-cli/        # CLI 工具
-├── src/                    # 主程序（二进制）
-├── docs/
-│   ├── design/             # 设计文档
-│   ├── protocols/          # 协议文档
-│   ├── plan/               # 计划文档
-│   └── research/           # 调研文档
-└── tests/                  # 集成测试
-```
-
-## 核心设计决策
-
-1. **Input Node = HTTP Server** - 每个输入节点是一个独立的 HTTP 服务，监听独立端口
-2. **协议动态识别** - Input Node 不预设协议，根据请求 path/body 动态识别
-3. **RoutingPayload = 已解析 HTTP 包 + 节点追溯** - 携带经过的节点表，支持回溯和调试
-4. **健康感知内置** - 所有节点内置健康检查，DFS 路由 + 回溯机制
-5. **图结构纯粹** - 节点直接引用 `Arc<Node>`，无需 Edge 类型
-6. **策略封装权重** - 权重等信息在路由策略内部，不在图结构中
-
-## 开发阶段
-
-- **Phase 1 (MVP)**: 1.5 周 - 核心代理、Tier 1 协议、健康感知 DFS、基础统计
-- **Phase 2**: 1.5 周 - 高级负载均衡、非流式热迁移、Tier 2 协议、CLI 增强
-- **Phase 3**: 1.5 周 - 限流、HTTP API、JWT 认证、分布式追踪
-- **Phase 4**: 2 周 - 插件系统、语义缓存、多区域集群、流式热迁移
-
-**总计**: 6.5 周完成全部开发
-
-## 协议文档
-
-- `docs/protocols/openai.md` - OpenAI Chat Completion API 完整协议
-- `docs/protocols/anthropic.md` - Anthropic Messages API 完整协议
-
-## 技术栈
-
-- **Async 运行时**: tokio 1.x
-- **HTTP 框架**: hyper 1.x (不使用 axum)
-- **序列化**: serde 1.x + serde_json
-- **配置**: toml 0.8
-- **错误处理**: thiserror 2.x
-- **日志**: tracing 0.1
-- **并发容器**: dashmap 5.x
-- **指标**: prometheus 0.13
-- **CLI**: clap 4.x
