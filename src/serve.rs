@@ -1,6 +1,7 @@
-/// HTTP 服务模块
-///
-/// 实现网关的 HTTP 服务器，处理请求路由、转发和协议转换
+//! HTTP 服务模块
+//!
+//! 实现网关的 HTTP 服务器，处理请求路由、转发和协议转换
+
 use crate::{
     Backend, GatewayError, InputNode, Node, Route, RouteError, RoutePayload, StatsStoreManager,
 };
@@ -43,11 +44,11 @@ pub async fn serve(
     let listener = TcpListener::bind(addr).await?;
     let client = client();
 
-    log::info!("Listening on {addr}");
+    info!("Listening on {addr}");
 
     loop {
         let (stream, remote_addr) = listener.accept().await?;
-        log::info!("Accepted connection from {remote_addr}");
+        info!("Accepted connection from {remote_addr}");
 
         let node = input_node.clone();
         let client = client.clone();
@@ -62,7 +63,7 @@ pub async fn serve(
             });
 
             if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                log::warn!("Error handling connection from {remote_addr}: {e}");
+                warn!("Error handling connection from {remote_addr}: {e}");
             }
         });
     }
@@ -136,105 +137,135 @@ async fn handle_request(
     }
 
     let start_time = Instant::now();
+    let method = req.method().clone();
     let payload = RoutePayload::new(req).await?;
-    match input_node.route(&payload) {
-        Ok(Route { mut nodes, backend }) => {
-            // 日志记录路由成功路径
-            nodes.push(input_node.clone());
-            let mut path_str = String::new();
-            for node in nodes.iter().rev() {
-                path_str.push_str(node.name());
-                path_str.push_str("->");
-            }
+    let mut retry = 0;
+    loop {
+        match input_node.route(&payload) {
+            Ok(route) => {
+                // 记录路由路径
+                let mut routing_path = format!("[{}]", input_node.port);
+                for node in route.nodes.iter().rev() {
+                    routing_path.push_str("->");
+                    routing_path.push_str(node.name());
+                }
+                info!("Routing path: {routing_path}");
 
-            let routing_path = path_str.strip_suffix("->").unwrap_or(&path_str);
-            log::info!("Routing path: {routing_path}");
-
-            let method = payload.parts.method.clone();
-            let path = payload.parts.uri.path().to_string();
-            let backend_node = nodes.first();
-            let response = if payload.protocol() == backend.protocol {
-                forward_to_backend(payload, backend, client, backend_node).await
-            } else {
-                forward_to_foreign(payload, backend, client, backend_node).await
-            };
-
-            // 记录成功事件
-            if let Some(stats) = stats {
-                let duration_ms = start_time.elapsed().as_millis();
-                let model = nodes
-                    .iter()
-                    .rev()
-                    .nth(1)
-                    .map(|n| n.name())
-                    .unwrap_or("unknown");
-                let backend_name = nodes.first().map(|n| n.name()).unwrap_or("unknown");
-                let event = crate::RoutingEvent::builder(timestamp_ms(), input_node.port)
-                    .remote_addr(remote_addr)
-                    .method(method.as_str())
-                    .path(&path)
-                    .model(model)
-                    .routing_path(routing_path)
-                    .backend(backend_name)
-                    .success(response.is_ok())
-                    .duration_ms(duration_ms.min(i64::MAX as u128) as i64)
-                    .build();
-                // 异步记录，不阻塞请求
-                let stats_clone = stats.clone();
-                tokio::spawn(async move {
-                    // 通过通道异步写入，不会阻塞
-                    if let Err(e) = stats_clone.record_event(event).await {
-                        log::warn!("Failed to record stats event: {e}");
+                match handle_route_success(payload.clone(), &route, client.clone()).await {
+                    Ok(response) => {
+                        // 记录成功事件
+                        if let Some(stats) = &stats {
+                            let duration_ms = start_time.elapsed().as_millis();
+                            let event =
+                                crate::RoutingEvent::builder(timestamp_ms(), input_node.port)
+                                    .remote_addr(remote_addr)
+                                    .method(method.as_str())
+                                    .path(payload.parts.uri.path())
+                                    .model(route.model_name())
+                                    .routing_path(routing_path)
+                                    .backend(route.backend_name())
+                                    .success(true)
+                                    .duration_ms(duration_ms as _)
+                                    .build();
+                            let stats = stats.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = stats.record_event(event).await {
+                                    warn!("Failed to record stats event: {e}")
+                                }
+                            });
+                        }
+                        return Ok(response);
                     }
-                });
-            }
-
-            response
-        }
-        Err(e) => {
-            // 记录失败事件
-            if let Some(stats) = stats {
-                let duration_ms = start_time.elapsed().as_millis();
-                let model = payload
-                    .body
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .unwrap_or("missing field");
-                let event = crate::RoutingEvent::builder(timestamp_ms(), input_node.port)
-                    .remote_addr(remote_addr)
-                    .method(payload.parts.method.as_str())
-                    .path(payload.parts.uri.path())
-                    .model(model)
-                    .routing_path("")
-                    .backend("")
-                    .success(false)
-                    .duration_ms(duration_ms.min(i64::MAX as u128) as i64)
-                    .error_type(match &e {
-                        RouteError::NoAvailable => "NoAvailable",
-                    })
-                    .build();
-
-                let stats_clone = stats.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = stats_clone.record_event(event).await {
-                        log::warn!("Failed to record stats event: {e}");
+                    Err(e) => {
+                        // 记录后端失败事件
+                        if let Some(stats) = &stats {
+                            let duration_ms = start_time.elapsed().as_millis();
+                            let event =
+                                crate::RoutingEvent::builder(timestamp_ms(), input_node.port)
+                                    .remote_addr(remote_addr)
+                                    .method(method.as_str())
+                                    .path(payload.parts.uri.path())
+                                    .model(route.model_name())
+                                    .routing_path(routing_path)
+                                    .backend(route.backend_name())
+                                    .success(false)
+                                    .duration_ms(duration_ms as _)
+                                    .error_type(e.to_string())
+                                    .build();
+                            let stats = stats.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = stats.record_event(event).await {
+                                    warn!("Failed to record stats event: {e}")
+                                }
+                            });
+                        }
+                        retry += 1;
+                        warn!("Failed to send to backend: {e}, retry = {retry}")
                     }
-                });
-            }
-
-            match e {
-                RouteError::NoAvailable => {
-                    log::warn!("No available backend for this model");
-                    Ok(Response::builder()
-                        .status(StatusCode::SERVICE_UNAVAILABLE)
-                        .body(
-                            Full::<Bytes>::from("No available backend for this model")
-                                .map_err(|_| GatewayError::NoAvailableBackend)
-                                .boxed(),
-                        )
-                        .unwrap())
                 }
             }
+            Err(e) => {
+                // 记录路由失败事件
+                if let Some(stats) = stats {
+                    let duration_ms = start_time.elapsed().as_millis();
+                    let event = crate::RoutingEvent::builder(timestamp_ms(), input_node.port)
+                        .remote_addr(remote_addr)
+                        .method(payload.parts.method.as_str())
+                        .path(payload.parts.uri.path())
+                        .model(payload.get_model())
+                        .success(false)
+                        .duration_ms(duration_ms as _)
+                        .error_type(match &e {
+                            RouteError::NoAvailable => "NoAvailable",
+                        })
+                        .build();
+                    let stats = stats.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = stats.record_event(event).await {
+                            warn!("Failed to record stats event: {e}")
+                        }
+                    });
+                }
+                return handle_route_failure(e).await;
+            }
+        }
+    }
+}
+
+/// 处理路由成功的情况
+async fn handle_route_success(
+    payload: RoutePayload,
+    route: &Route,
+    client: HttpsClient,
+) -> Result<Response<BoxBody>, GatewayError> {
+    let Route { nodes, backend } = route;
+    let result = if payload.protocol() == backend.protocol {
+        forward_to_backend(payload, backend, client).await
+    } else {
+        forward_to_foreign(payload, backend, client).await
+    };
+    if let Some(health) = nodes.first().and_then(|node| node.health()) {
+        match result {
+            Ok(_) => health.record_success(),
+            Err(_) => health.record_failure(),
+        }
+    }
+    result
+}
+
+/// 处理路由失败的情况
+async fn handle_route_failure(e: RouteError) -> Result<Response<BoxBody>, GatewayError> {
+    match e {
+        RouteError::NoAvailable => {
+            warn!("No available backend for this model");
+            Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(
+                    Full::<Bytes>::from("No available backend for this model")
+                        .map_err(|_| GatewayError::NoAvailableBackend)
+                        .boxed(),
+                )
+                .unwrap())
         }
     }
 }
@@ -288,9 +319,8 @@ const ANTHROPIC_VERSION: HeaderName = HeaderName::from_static("anthropic-version
 /// 直接转发请求到后端（相同协议），支持 SSE 流式响应
 async fn forward_to_backend(
     payload: RoutePayload,
-    backend: Backend,
+    backend: &Backend,
     client: HttpsClient,
-    backend_node: Option<&Arc<dyn crate::Node>>,
 ) -> Result<Response<BoxBody>, GatewayError> {
     // 重建 URI
     let uri = format!("{}{}", backend.base_url, payload.parts.uri.path())
@@ -336,7 +366,7 @@ async fn forward_to_backend(
         }
     }
 
-    log::debug!("use headers: {:#?}", req_builder.headers_ref());
+    debug!("use headers: {:#?}", req_builder.headers_ref());
     let forward_req: Request<Full<Bytes>> = req_builder
         .body(Full::from(serde_json::to_vec(&payload.body).unwrap()))
         .unwrap();
@@ -344,14 +374,7 @@ async fn forward_to_backend(
     // 发送请求到后端
     match client.request(forward_req).await {
         Ok(response) => {
-            // 记录成功
-            if let Some(node) = backend_node
-                && let Some(health) = node.health()
-            {
-                health.record_success();
-            }
             let (parts, body) = response.into_parts();
-
             // 流式转发后端响应体
             Ok(Response::from_parts(
                 parts,
@@ -360,16 +383,11 @@ async fn forward_to_backend(
                     .boxed(),
             ))
         }
-        Err(_) => {
-            // 记录失败
-            if let Some(node) = backend_node
-                && let Some(health) = node.health()
-            {
-                health.record_failure().await;
-            }
-            Err(GatewayError::BackendRequestFailed(
-                "Failed to connect to backend".into(),
-            ))
+        Err(e) => {
+            warn!("Failed to connect to backend: {e}");
+            Err(GatewayError::BackendRequestFailed(format!(
+                "Failed to connect to backend: {e}"
+            )))
         }
     }
 }
@@ -377,12 +395,11 @@ async fn forward_to_backend(
 /// 转发请求到使用不同协议的后端，并进行协议转换
 async fn forward_to_foreign(
     payload: RoutePayload,
-    backend: Backend,
+    backend: &Backend,
     client: HttpsClient,
-    backend_node: Option<&Arc<dyn crate::Node>>,
 ) -> Result<Response<BoxBody>, GatewayError> {
     let protocol = payload.protocol();
-    log::info!("forward to foreign: {protocol:?} -> {:?}", backend.protocol);
+    info!("forward to foreign: {protocol:?} -> {:?}", backend.protocol);
 
     // 重建 URI
     let uri = format!("{}{}", backend.base_url, backend.protocol.path())
@@ -431,7 +448,7 @@ async fn forward_to_foreign(
         (_, _) => unreachable!(),
     };
 
-    log::debug!("use headers: {:#?}", req_builder.headers_ref());
+    debug!("use headers: {:#?}", req_builder.headers_ref());
     let forward_req: Request<Full<Bytes>> = req_builder
         .body(Full::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
@@ -449,25 +466,12 @@ async fn forward_to_foreign(
 
     // 发送请求到后端
     match client.request(forward_req).await {
-        Ok(response) => {
-            // 记录成功
-            if let Some(node) = backend_node
-                && let Some(health) = node.health()
-            {
-                health.record_success();
-            }
-            Ok(forward_foreign_response(response, converter))
-        }
-        Err(_) => {
-            // 记录失败
-            if let Some(node) = backend_node
-                && let Some(health) = node.health()
-            {
-                health.record_failure().await;
-            }
-            Err(GatewayError::BackendRequestFailed(
-                "Failed to connect to backend".into(),
-            ))
+        Ok(response) => Ok(forward_foreign_response(response, converter)),
+        Err(e) => {
+            warn!("Failed to connect to backend (foreign protocol): {e}");
+            Err(GatewayError::BackendRequestFailed(format!(
+                "Failed to connect to backend: {e}"
+            )))
         }
     }
 }
@@ -529,7 +533,7 @@ fn process_frame(
         Ok(msgs) => {
             let mut ans = String::new();
             for msg in msgs {
-                log::debug!("in: {msg}");
+                debug!("in: {msg}");
                 let mut converter = converter.lock().unwrap();
                 match converter.process(msg) {
                     Ok(out) => {
@@ -538,7 +542,7 @@ fn process_frame(
                         }
                     }
                     Err(e) => {
-                        log::error!("Protocol conversion error: {e}");
+                        error!("Protocol conversion error: {e}");
                         error_occurred.store(true, Ordering::Relaxed);
                         let error_data = serde_json::json!({
                             "error": {
@@ -554,7 +558,7 @@ fn process_frame(
             ans
         }
         Err(e) => {
-            log::error!("SSE parsing error: {e}");
+            error!("SSE parsing error: {e}");
             error_occurred.store(true, Ordering::Relaxed);
             let error_data = serde_json::json!({
                 "error": {
@@ -565,6 +569,6 @@ fn process_frame(
             SseMessage::new(&error_data).to_string()
         }
     };
-    log::debug!("out: {ans}");
+    debug!("out: {ans}");
     Frame::data(Bytes::from(ans))
 }

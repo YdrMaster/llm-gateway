@@ -1,6 +1,6 @@
-﻿/// 日志模块
-/// 
-/// 提供带颜色的自定义日志格式
+//! 日志模块
+//!
+//! 提供带颜色的自定义日志格式
 
 use colored::{Color, Colorize};
 use flexi_logger::DeferredNow;
@@ -17,7 +17,7 @@ pub(crate) fn init(level: LevelFilter) {
 }
 
 /// 自定义日志格式：时间戳 + 日志级别 + 模块路径 + 消息
-/// 
+///
 /// 不同日志级别使用不同颜色显示，便于快速识别
 fn log_format(
     w: &mut dyn std::io::Write,

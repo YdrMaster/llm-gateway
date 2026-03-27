@@ -1,6 +1,6 @@
-/// 序列节点模块
-/// 
-/// 实现顺序路由策略，按顺序尝试每个后端直到成功
+//! 序列节点模块
+//!
+//! 实现顺序路由策略，按顺序尝试每个后端直到成功
 
 use crate::{Node, RouteError, RoutePayload, RouteResult};
 use std::{
@@ -9,7 +9,7 @@ use std::{
 };
 
 /// 序列节点结构
-/// 
+///
 /// 按顺序尝试多个后端节点，直到找到一个可用的
 pub(crate) struct SequenceNode {
     /// 节点名称

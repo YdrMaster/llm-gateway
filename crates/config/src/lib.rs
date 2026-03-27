@@ -259,7 +259,7 @@ mod tests {
     use std::str::FromStr;
 
     /// 完整配置解析测试
-    /// 
+    ///
     /// 验证所有节点类型的正确解析
     #[test]
     fn test_parse_full_config() {

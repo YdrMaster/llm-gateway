@@ -1,6 +1,6 @@
-/// 输入节点模块
-/// 
-/// 实现网关的入口节点，负责接收客户端请求并根据模型名称路由到对应的后端
+//! 输入节点模块
+//!
+//! 实现网关的入口节点，负责接收客户端请求并根据模型名称路由到对应的后端
 
 use crate::{Node, RouteError, RoutePayload, RouteResult};
 use serde_json::Value;
@@ -10,7 +10,7 @@ use std::{
 };
 
 /// 输入节点结构
-/// 
+///
 /// 网关的入口点，维护模型名称到下游节点的映射
 pub struct InputNode {
     /// 节点名称

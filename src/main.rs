@@ -2,12 +2,12 @@ mod logger;
 
 use llm_gateway::{StatisticsConfig, StatsStoreManager, build, serve};
 use llm_gateway_config::GatewayConfig;
-use log::warn;
+use log::{LevelFilter, info, warn};
 use std::{env, fs, sync::Arc};
 use tokio::task::JoinSet;
 
 /// 主入口函数
-/// 
+///
 /// 读取配置文件，初始化日志和统计模块，启动 HTTP 服务器
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 读取配置文件路径（默认为 config.toml）
@@ -16,13 +16,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: GatewayConfig = config.parse()?;
 
     // 初始化日志系统
-    logger::init(log::LevelFilter::Debug);
-    log::info!("{config:#?}");
+    logger::init(LevelFilter::Debug);
+    info!("{config:?}");
 
     // 构建节点图
     let inputs = build(&config);
     if inputs.is_empty() {
-        log::warn!("No input node in config");
+        warn!("No input node in config");
         return Ok(());
     }
 
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// 初始化统计模块
-/// 
+///
 /// 根据配置创建统计存储管理器，若禁用则返回 None
 async fn init_statistics(
     config: &Option<StatisticsConfig>,
@@ -57,15 +57,15 @@ async fn init_statistics(
     match config {
         Some(config) => {
             if !config.enabled {
-                log::info!("Statistics disabled");
+                info!("Statistics disabled");
                 return Ok(None);
             }
             let store = StatsStoreManager::new(config).await?;
-            log::info!("Statistics enabled, db_path={}", config.db_path);
+            info!("Statistics enabled, db_path={}", config.db_path);
             Ok(Some(Arc::new(store)))
         }
         None => {
-            log::info!("Statistics not configured, using defaults (disabled)");
+            info!("Statistics not configured, using defaults (disabled)");
             Ok(None)
         }
     }

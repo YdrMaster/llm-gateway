@@ -1,6 +1,6 @@
-/// 健康监控模块
-/// 
-/// 实现滑动窗口式的健康检查和熔断机制，防止向后端发送过多失败请求
+//! 健康监控模块
+//!
+//! 实现滑动窗口式的健康检查和熔断机制，防止向后端发送过多失败请求
 
 use llm_gateway_config::InternalHealthConfig;
 use std::collections::VecDeque;
@@ -11,7 +11,7 @@ use std::time::Instant;
 const MAX_WINDOW_CAPACITY: usize = 10000;
 
 /// 单个后端节点的健康监控器
-/// 
+///
 /// 使用滑动窗口记录请求历史，当失败次数超过阈值时进入冷却期
 pub struct HealthMonitor {
     /// 监控配置
@@ -87,13 +87,13 @@ impl HealthMonitor {
 
         // 成功后恢复到健康状态
         if was_cooling_down {
-            log::info!("Backend recovered from cooldown");
+            info!("Backend recovered from cooldown");
         }
         state.circuit = CircuitState::Healthy;
     }
 
     /// 记录一次失败的请求
-    pub async fn record_failure(&self) {
+    pub fn record_failure(&self) {
         let mut state = self.state.write().unwrap();
         let now = Instant::now();
 
@@ -112,10 +112,9 @@ impl HealthMonitor {
         // 检查是否超过阈值（使用增量计数实现 O(1) 复杂度）
         if state.failure_count >= self.config.failure_threshold {
             let until = now + self.config.cooldown_duration;
-            log::info!(
+            info!(
                 "Backend entering cooldown for {:?} until {:?}",
-                self.config.cooldown_duration,
-                until
+                self.config.cooldown_duration, until
             );
             // 进入冷却期
             state.circuit = CircuitState::CoolingDown { until };
@@ -123,7 +122,7 @@ impl HealthMonitor {
     }
 
     /// 清理滑动窗口中的过期记录
-    /// 
+    ///
     /// 静态版本，用于异步上下文
     fn cleanup_window_static(state: &mut HealthState, config: &InternalHealthConfig, now: Instant) {
         let cutoff = now - config.window_size;
@@ -165,32 +164,32 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_initially_available() {
+    #[test]
+    fn test_initially_available() {
         let monitor = HealthMonitor::new(test_config());
         assert!(monitor.is_available());
     }
 
-    #[tokio::test]
-    async fn test_enters_cooldown_after_failures() {
+    #[test]
+    fn test_enters_cooldown_after_failures() {
         let monitor = HealthMonitor::new(test_config());
 
         // Record 3 failures (threshold)
-        monitor.record_failure().await;
-        monitor.record_failure().await;
-        monitor.record_failure().await;
+        monitor.record_failure();
+        monitor.record_failure();
+        monitor.record_failure();
 
         // Should be in cooldown
         assert!(!monitor.is_available());
     }
 
-    #[tokio::test]
-    async fn test_success_resets_cooldown() {
+    #[test]
+    fn test_success_resets_cooldown() {
         let monitor = HealthMonitor::new(test_config());
 
         // Record failures
-        monitor.record_failure().await;
-        monitor.record_failure().await;
+        monitor.record_failure();
+        monitor.record_failure();
 
         // Record success
         monitor.record_success();
@@ -199,38 +198,38 @@ mod tests {
         assert!(monitor.is_available());
     }
 
-    #[tokio::test]
-    async fn test_window_expires_old_records() {
+    #[test]
+    fn test_window_expires_old_records() {
         // This test verifies the sliding window behavior
         // In real usage, records older than window_size are cleaned up
         let monitor = HealthMonitor::new(test_config());
 
         // Record 2 failures
-        monitor.record_failure().await;
-        monitor.record_failure().await;
+        monitor.record_failure();
+        monitor.record_failure();
 
         // Still available (threshold not reached)
         assert!(monitor.is_available());
     }
 
-    #[tokio::test]
-    async fn test_incremental_failure_count() {
+    #[test]
+    fn test_incremental_failure_count() {
         let monitor = HealthMonitor::new(test_config());
 
         // Record 2 failures
-        monitor.record_failure().await;
-        monitor.record_failure().await;
+        monitor.record_failure();
+        monitor.record_failure();
 
         // Verify still available
         assert!(monitor.is_available());
 
         // 3rd failure triggers cooldown
-        monitor.record_failure().await;
+        monitor.record_failure();
         assert!(!monitor.is_available());
     }
 
-    #[tokio::test]
-    async fn test_window_capacity_limit() {
+    #[test]
+    fn test_window_capacity_limit() {
         let monitor = HealthMonitor::new(InternalHealthConfig {
             window_size: Duration::from_secs(3600), // Long window
             failure_threshold: 100,                 // High threshold

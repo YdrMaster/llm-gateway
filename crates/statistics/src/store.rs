@@ -6,6 +6,7 @@ use crate::config::StatisticsConfig;
 use crate::event::RoutingEvent;
 use crate::query::{AggQuery, AggStats, EventFilter};
 use crate::sqlite::SqliteStore;
+use log::warn;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -83,13 +84,13 @@ impl StatsStoreManager {
         if let Err(e) = tokio::task::spawn_blocking(move || {
             for event in events {
                 if let Err(e) = store.insert_event(&event) {
-                    log::warn!("Failed to write event: {e}");
+                    warn!("Failed to write event: {e}");
                 }
             }
         })
         .await
         {
-            log::warn!("Background writer task failed: {e}");
+            warn!("Background writer task failed: {e}");
         }
     }
 

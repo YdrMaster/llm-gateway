@@ -2,6 +2,7 @@
 //!
 //! 提供 SSE 流式数据的解析和处理功能
 
+use log::error;
 use memchr::memmem::Finder;
 use serde_json::Value as Json;
 use std::{error, fmt, sync::OnceLock};
@@ -170,5 +171,16 @@ impl SseCollector {
         }
 
         Ok(Some(ans).filter(|msg| !msg.is_empty()))
+    }
+}
+
+impl Drop for SseCollector {
+    fn drop(&mut self) {
+        if !self.buffer.is_empty() {
+            error!(
+                "SSE Collector dropped not empty: {}",
+                String::from_utf8_lossy(&self.buffer)
+            )
+        }
     }
 }

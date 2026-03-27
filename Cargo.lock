@@ -612,6 +612,7 @@ dependencies = [
 name = "llm-gateway-protocols"
 version = "0.0.0"
 dependencies = [
+ "log",
  "memchr",
  "serde_json",
 ]

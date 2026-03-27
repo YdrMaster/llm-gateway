@@ -1,17 +1,6 @@
-// LLM Gateway 核心库
-//
-// 提供请求路由、协议转换和统计功能的核心模块
-
-use http::{Request, request};
-use http_body_util::BodyExt;
-use hyper::body::Incoming;
-use llm_gateway_config::{GatewayConfig, VirtualNode};
-use llm_gateway_protocols::Protocol;
-use serde_json::Value;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+//! LLM Gateway 核心库
+//!
+//! 提供请求路由、协议转换和统计功能的核心模块
 
 mod backend_node; // 后端节点模块
 mod error; // 错误类型定义
@@ -19,6 +8,9 @@ mod health_monitor; // 健康监控模块
 mod input_node; // 输入节点模块
 mod sequence_node; // 序列节点模块
 mod serve; // HTTP 服务模块
+
+#[macro_use]
+extern crate log;
 
 pub use error::GatewayError;
 pub use input_node::InputNode;
@@ -32,6 +24,16 @@ pub use llm_gateway_statistics::{
 
 use crate::{
     backend_node::BackendNode, health_monitor::HealthMonitor, sequence_node::SequenceNode,
+};
+use http::{Request, request};
+use http_body_util::BodyExt;
+use hyper::body::Incoming;
+use llm_gateway_config::{GatewayConfig, VirtualNode};
+use llm_gateway_protocols::Protocol;
+use serde_json::Value;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
 };
 
 /// 路由负载 - 在路由图中流动的请求上下文
@@ -57,6 +59,14 @@ impl RoutePayload {
     pub fn protocol(&self) -> Protocol {
         Protocol::from_path(self.parts.uri.path())
     }
+
+    /// 根据请求路径判断使用的协议
+    pub fn get_model(&self) -> &str {
+        self.body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("missing field")
+    }
 }
 
 /// 路由结果
@@ -68,6 +78,16 @@ pub struct Route {
     nodes: Vec<Arc<dyn Node>>,
     /// 目标后端
     backend: Backend,
+}
+
+impl Route {
+    pub fn model_name(&self) -> &str {
+        self.nodes.last().map(|n| n.name()).unwrap_or("no model")
+    }
+
+    pub fn backend_name(&self) -> &str {
+        self.nodes.first().map(|n| n.name()).unwrap_or("no backend")
+    }
 }
 
 /// 后端配置信息
@@ -101,7 +121,7 @@ pub trait Node: Send + Sync {
 }
 
 /// 根据配置构建网关节点图
-/// 
+///
 /// 从配置文件中读取节点定义，创建节点实例并建立节点间的连接关系
 pub fn build(config: &GatewayConfig) -> Vec<Arc<InputNode>> {
     use llm_gateway_config::Node as ConfigNode;
