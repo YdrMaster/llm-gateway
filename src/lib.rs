@@ -2,50 +2,46 @@
 //!
 //! 提供请求路由、协议转换和统计功能的核心模块
 
-mod api; // Admin API module
-mod backend_node; // 后端节点模块
-mod error; // 错误类型定义
-mod health_monitor; // 健康监控模块
-mod input_node; // 输入节点模块
-mod sequence_node; // 序列节点模块
-mod serve; // HTTP 服务模块
+mod api;
+mod backend_node;
+mod error;
+mod health_monitor;
+mod input_node;
+mod sequence_node;
+mod serve;
 
 #[macro_use]
 extern crate log;
 
+pub use api::admin::AdminServer;
 pub use error::GatewayError;
 pub use input_node::InputNode;
 pub use serve::serve;
-
-// Admin server
-pub use api::admin::AdminServer;
-
 // 统计模块重新导出
 pub use llm_gateway_statistics::{
     AggQuery, AggStats, EventFilter, RoutingEvent, StatisticsConfig, StatsQueryBuilder,
     StatsStoreManager, parse_time,
 };
 
-use crate::{
-    backend_node::BackendNode, health_monitor::HealthMonitor, sequence_node::SequenceNode,
-};
+use backend_node::BackendNode;
+use health_monitor::HealthMonitor;
 use http::{Request, request};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use llm_gateway_config::{GatewayConfig, VirtualNode};
 use llm_gateway_protocols::Protocol;
-use serde_json::Value;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use sequence_node::SequenceNode;
+use serde_json::Value as Json;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// 路由负载 - 在路由图中流动的请求上下文
 #[derive(Clone)]
 pub struct RoutePayload {
+    pub protocol: Protocol,
     pub parts: request::Parts,
     /// 请求体（已解析为 JSON）
-    pub body: Value,
+    pub body: Json,
 }
 
 impl RoutePayload {
@@ -54,21 +50,22 @@ impl RoutePayload {
         let (parts, incoming) = req.into_parts();
         let body = incoming.collect().await?;
         Ok(Self {
+            protocol: Protocol::from_path(parts.uri.path()).ok_or(GatewayError::UnknownProtocol)?,
             parts,
             body: serde_json::from_slice(&body.to_bytes())?,
         })
     }
 
     /// 根据请求路径判断使用的协议
-    pub fn protocol(&self) -> Protocol {
-        Protocol::from_path(self.parts.uri.path())
+    const fn protocol(&self) -> Protocol {
+        self.protocol
     }
 
     /// 根据请求路径判断使用的协议
-    pub fn get_model(&self) -> &str {
+    fn get_model(&self) -> &str {
         self.body
             .get("model")
-            .and_then(Value::as_str)
+            .and_then(Json::as_str)
             .unwrap_or("missing field")
     }
 }
@@ -78,6 +75,7 @@ pub type RouteResult = Result<Route, RouteError>;
 
 /// 路由结果，包含路由路径和后端信息
 pub struct Route {
+    /// 倒序：backend -> #n -> #n-1 -> ... -> model
     pub nodes: Vec<Arc<dyn Node>>,
     pub backend: Backend,
 }

@@ -31,7 +31,7 @@ impl Protocol {
     }
 
     /// 获取协议名称
-    pub fn name(&self) -> &str {
+    pub const fn name(&self) -> &str {
         match self {
             Self::OpenAI => "openai",
             Self::Anthropic => "anthropic",
@@ -39,16 +39,16 @@ impl Protocol {
     }
 
     /// 从请求路径创建
-    pub fn from_path(path: &str) -> Self {
+    pub fn from_path(path: &str) -> Option<Self> {
         match path {
-            "/v1/chat/completions" => Self::OpenAI,
-            "/v1/messages" => Self::Anthropic,
-            _ => panic!("Unknown path {path}"),
+            "/v1/chat/completions" => Some(Self::OpenAI),
+            "/v1/messages" => Some(Self::Anthropic),
+            _ => None,
         }
     }
 
     /// 获取请求路径
-    pub fn path(&self) -> &str {
+    pub const fn path(&self) -> &str {
         match self {
             Self::OpenAI => "/v1/chat/completions",
             Self::Anthropic => "/v1/messages",
