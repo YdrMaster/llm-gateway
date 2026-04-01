@@ -3,13 +3,14 @@
 //! 实现网关的 HTTP 服务器，处理请求路由、转发和协议转换
 
 use crate::{
-    Backend, GatewayError, InputNode, Node, Route, RouteError, RoutePayload, StatsStoreManager,
+    Backend, GatewayError, InputNode, Node, Route, RouteError, RouteGuard, RoutePayload,
+    StatsStoreManager,
 };
 use http::header::{ALLOW, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use http::{HeaderName, Method, StatusCode, Uri};
 use http_body_util::BodyExt;
 use http_body_util::Full;
-use hyper::body::{Bytes, Frame, Incoming};
+use hyper::body::{Body, Bytes, Frame, Incoming};
 use hyper::{Request, Response, server::conn::http1, service::service_fn};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
@@ -22,11 +23,48 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::env;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 use std::time::Instant;
 use std::{fmt::Write, sync::Arc};
 use tokio::net::TcpListener;
+
+/// 持有 nodes 的 Body 包装器，确保 nodes 在 body 流式传输完成后才释放
+///
+/// 这用于确保节点并发度计数在响应完全发送后才减少，保证并行度测量准确
+struct NodeHoldingBody<B> {
+    inner: B,
+    #[allow(dead_code)]
+    nodes: Vec<Box<dyn RouteGuard>>,
+}
+
+impl<B> NodeHoldingBody<B> {
+    fn new(inner: B, nodes: Vec<Box<dyn RouteGuard>>) -> Self {
+        Self { inner, nodes }
+    }
+}
+
+impl<B: Body + Unpin> Body for NodeHoldingBody<B> {
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
+    }
+}
 
 /// HTTP 响应体的类型别名
 type BoxBody = http_body_util::combinators::BoxBody<Bytes, GatewayError>;
@@ -152,13 +190,17 @@ async fn handle_request(
             Ok(route) => {
                 // 记录路由路径
                 let mut routing_path = format!("[{}]", input_node.port());
-                for node in route.nodes.iter().rev() {
+                for node in route.guards.iter().rev() {
                     routing_path.push_str("->");
                     routing_path.push_str(node.node().name());
                 }
                 info!("Routing path: {routing_path}");
 
-                match handle_route_success(payload.clone(), &route, client.clone()).await {
+                // 提前获取需要的信息，因为 route 将被 move 进 handle_route_success
+                let model_name = route.model_name().to_string();
+                let backend_name = route.backend_name().to_string();
+
+                match handle_route_success(payload.clone(), route, client.clone()).await {
                     Ok(response) => {
                         // 记录成功事件
                         if let Some(stats) = &stats {
@@ -170,9 +212,9 @@ async fn handle_request(
                             .remote_addr(remote_addr)
                             .method(method.as_str())
                             .path(payload.parts.uri.path())
-                            .model(route.model_name())
+                            .model(&model_name)
                             .routing_path(routing_path)
-                            .backend(route.backend_name())
+                            .backend(&backend_name)
                             .success(true)
                             .duration_ms(duration_ms as _)
                             .build();
@@ -196,9 +238,9 @@ async fn handle_request(
                             .remote_addr(remote_addr)
                             .method(method.as_str())
                             .path(payload.parts.uri.path())
-                            .model(route.model_name())
+                            .model(&model_name)
                             .routing_path(routing_path)
-                            .backend(route.backend_name())
+                            .backend(&backend_name)
                             .success(false)
                             .duration_ms(duration_ms as _)
                             .error_type(e.to_string())
@@ -248,22 +290,34 @@ async fn handle_request(
 /// 处理路由成功的情况
 async fn handle_route_success(
     payload: RoutePayload,
-    route: &Route,
+    route: Route,
     client: HttpsClient,
 ) -> Result<Response<BoxBody>, GatewayError> {
-    let Route { nodes, backend, .. } = route;
+    let Route {
+        guards: nodes,
+        backend,
+        ..
+    } = route;
     let result = if payload.protocol() == backend.protocol {
-        forward_to_backend(payload, backend, client).await
+        forward_to_backend(payload, &backend, client).await
     } else {
-        forward_to_foreign(payload, backend, client).await
+        forward_to_foreign(payload, &backend, client).await
     };
     if let Some(health) = nodes.first().and_then(|node| node.node().health()) {
-        match result {
+        match &result {
             Ok(_) => health.record_success(),
             Err(_) => health.record_failure(),
         }
     }
-    result
+    // 包装响应体，将 nodes 附加到 body 上，确保它们在流式传输完成后才释放
+    match result {
+        Ok(response) => {
+            let (parts, body) = response.into_parts();
+            let wrapped_body = NodeHoldingBody::new(body, nodes);
+            Ok(Response::from_parts(parts, wrapped_body.boxed()))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// 处理路由失败的情况

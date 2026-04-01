@@ -91,20 +91,20 @@ pub type RouteResult = Result<Route, RouteError>;
 pub struct Route {
     /// 路由路径上的节点守卫列表
     /// 倒序：backend -> #n -> #n-1 -> ... -> model
-    pub nodes: Vec<Box<dyn NodeGuard>>,
+    pub guards: Vec<Box<dyn RouteGuard>>,
     pub backend: Backend,
 }
 
 impl Route {
     pub fn model_name(&self) -> &str {
-        self.nodes
+        self.guards
             .last()
             .map(|n| n.node().name())
             .unwrap_or("no model")
     }
 
     pub fn backend_name(&self) -> &str {
-        self.nodes
+        self.guards
             .first()
             .map(|n| n.node().name())
             .unwrap_or("no backend")
@@ -148,7 +148,7 @@ pub trait Node: Send + Sync {
 ///
 /// 用于在 Route 中携带节点引用，同时通过 Drop 实现资源清理
 /// 注意：此 trait 不继承 Clone，因此是对象安全的
-pub trait NodeGuard: Send + Sync {
+pub trait RouteGuard: Send + Sync {
     /// 获取底层节点引用
     fn node(&self) -> &dyn Node;
 }
@@ -156,7 +156,7 @@ pub trait NodeGuard: Send + Sync {
 /// 简单守卫，用于包装不需要特殊清理的节点
 pub struct SimpleGuard<T>(T);
 
-impl<T: Node> NodeGuard for SimpleGuard<T> {
+impl<T: Node> RouteGuard for SimpleGuard<T> {
     fn node(&self) -> &dyn Node {
         &self.0
     }

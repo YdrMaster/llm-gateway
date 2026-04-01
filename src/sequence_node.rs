@@ -32,7 +32,7 @@ impl Node for SequenceNode {
         for successor in &*self.0.successors.read().unwrap() {
             match successor.route(payload) {
                 Ok(mut route) => {
-                    route.nodes.push(Box::new(SimpleGuard(self.clone())));
+                    route.guards.push(Box::new(SimpleGuard(self.clone())));
                     return Ok(route);
                 }
                 Err(e) => match e {

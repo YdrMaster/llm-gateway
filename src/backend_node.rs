@@ -32,7 +32,7 @@ impl Node for BackendNode {
         let protocol = payload.protocol();
         match self.0.base_url.get(protocol.name()) {
             UrlResult::Native(url) => Ok(Route {
-                nodes: vec![Box::new(SimpleGuard(self.clone()))],
+                guards: vec![Box::new(SimpleGuard(self.clone()))],
                 backend: Backend {
                     protocol,
                     base_url: url.into(),
@@ -40,7 +40,7 @@ impl Node for BackendNode {
                 },
             }),
             UrlResult::Foreign(protocol, url) => Ok(Route {
-                nodes: vec![Box::new(SimpleGuard(self.clone()))],
+                guards: vec![Box::new(SimpleGuard(self.clone()))],
                 backend: Backend {
                     protocol: match protocol {
                         "openai" => Protocol::OpenAI,

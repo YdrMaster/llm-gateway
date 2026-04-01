@@ -2,7 +2,7 @@
 //!
 //! 实现并发连接数限制的虚拟节点，仅负责并发控制，将请求转发给单一后继
 
-use crate::{Node, NodeGuard, RouteError, RoutePayload, RouteResult};
+use crate::{Node, RouteError, RouteGuard, RoutePayload, RouteResult};
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::{
@@ -51,7 +51,7 @@ impl Drop for ConcurrencyGuard {
     }
 }
 
-impl NodeGuard for ConcurrencyGuard {
+impl RouteGuard for ConcurrencyGuard {
     fn node(&self) -> &dyn Node {
         &self.0 as _
     }
@@ -84,7 +84,7 @@ impl Node for ConcurrencyNode {
                     .route(payload)
                     .map(|mut route| {
                         // 成功：将 Guard 添加到路由
-                        route.nodes.push(Box::new(guard));
+                        route.guards.push(Box::new(guard));
                         route
                     })
             }
