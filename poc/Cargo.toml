@@ -10,11 +10,17 @@ pingora-core = "0.8"
 pingora-proxy = "0.8"
 pingora-http = "0.8"
 
-# 复用现有协议转换代码
-llm-gateway-protocols = { path = "../../../crates/protocols" }
+llm-gateway-protocols.path = "../crates/protocols"
 
+# 复用现有协议转换代码
 # 异步运行时
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "signal"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "sync",
+    "time",
+    "signal",
+] }
 
 # 工具库
 serde_json = "1"
@@ -30,3 +36,4 @@ rand = "0.8"
 # 开发依赖
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json", "stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

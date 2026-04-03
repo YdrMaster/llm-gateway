@@ -7,9 +7,11 @@ use crate::backend::BackendManager;
 use crate::middleware::concurrency::ConcurrencyLimitLayer;
 use crate::middleware::protocol::ProtocolConversionMiddleware;
 use crate::strategy::chain::{ChainExecutor, RoutingContext};
+use crate::strategy::streaming_context::StreamingTransformCtx;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use llm_gateway_protocols::Protocol;
 use log::{debug, error, info, warn};
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_proxy::{ProxyHttp, Session};
@@ -38,6 +40,8 @@ pub struct ProxyContext {
     pub path: String,
     /// 模型名称
     pub model: String,
+    /// 流式转换状态（在 upstream_response_filter 中创建，在 body filter 中使用）
+    pub streaming_transform: Option<StreamingTransformCtx>,
 }
 
 impl LlmGatewayProxy {
@@ -70,6 +74,40 @@ impl LlmGatewayProxy {
         // 默认模型
         "default".to_string()
     }
+
+    /// 根据选中的后端地址确定源协议
+    fn detect_source_protocol(&self, ctx: &ProxyContext) -> Protocol {
+        // 如果后端地址包含 "anthropic"，则认为是 Anthropic 协议
+        if ctx.selected_backend.as_ref().map(|b| b.addr.contains("anthropic")).unwrap_or(false) {
+            Protocol::Anthropic
+        } else {
+            // Mock 后端 A 和 B 返回 OpenAI 格式
+            Protocol::OpenAI
+        }
+    }
+
+    /// 根据源 → 目标创建对应的转换器
+    fn create_streaming_transform(&self, ctx: &ProxyContext) -> Option<StreamingTransformCtx> {
+        let source = self.detect_source_protocol(ctx);
+        let target = Protocol::Anthropic; // 测试用：OpenAI → Anthropic
+
+        let converter = self.protocol_middleware.create_converter(source, target);
+
+        if converter.is_some() {
+            Some(StreamingTransformCtx::new(
+                source.name().to_string(),
+                target.name().to_string(),
+                converter,
+            ))
+        } else {
+            // 无需转换 — 仍然创建上下文以进行 SSE 解析
+            Some(StreamingTransformCtx::new(
+                source.name().to_string(),
+                source.name().to_string(),
+                None,
+            ))
+        }
+    }
 }
 
 #[async_trait]
@@ -82,6 +120,7 @@ impl ProxyHttp for LlmGatewayProxy {
             _permit: None,
             path: String::new(),
             model: String::new(),
+            streaming_transform: None,
         }
     }
 
@@ -182,5 +221,59 @@ impl ProxyHttp for LlmGatewayProxy {
 
         // ctx 在此处 Drop，并发许可会自动释放
         debug!("Request context dropped, concurrency permit released");
+    }
+
+    async fn upstream_response_filter(
+        &self,
+        _session: &mut Session,
+        _upstream_response: &mut ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> Result<(), Box<pingora_core::Error>> {
+        // 在收到第一个响应头时初始化流式转换上下文
+        ctx.streaming_transform = self.create_streaming_transform(ctx);
+
+        Ok(())
+    }
+
+    fn upstream_response_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<std::time::Duration>, Box<pingora_core::Error>> {
+        if body.is_none() && !end_of_stream {
+            return Ok(None);
+        }
+
+        let Some(transform) = ctx.streaming_transform.as_mut() else {
+            return Ok(None);
+        };
+
+        let mut output = Vec::new();
+
+        // 处理传入的数据块
+        if let Some(chunk) = body.take() {
+            output.extend(transform.process_chunk(&chunk));
+        }
+
+        // 流结束时，排出任何剩余的 SSE 数据
+        if end_of_stream {
+            output.extend(transform.finish());
+            info!(
+                "Streaming transform finished: {} → {}",
+                transform.source_protocol,
+                transform.target_protocol
+            );
+        }
+
+        // 用转换后的输出替换 body
+        if output.is_empty() {
+            *body = None;
+        } else {
+            *body = Some(Bytes::from(output));
+        }
+
+        Ok(None)
     }
 }

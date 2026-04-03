@@ -2,3 +2,4 @@
 
 pub mod chain;
 pub mod failover;
+pub mod streaming_context;
