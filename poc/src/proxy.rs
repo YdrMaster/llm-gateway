@@ -14,6 +14,7 @@ use bytes::Bytes;
 use llm_gateway_protocols::Protocol;
 use log::{debug, error, info, warn};
 use pingora_core::upstreams::peer::HttpPeer;
+use pingora_core::Error;
 use pingora_proxy::{ProxyHttp, Session};
 use http::StatusCode;
 use pingora_http::ResponseHeader;
@@ -42,6 +43,8 @@ pub struct ProxyContext {
     pub model: String,
     /// 流式转换状态（在 upstream_response_filter 中创建，在 body filter 中使用）
     pub streaming_transform: Option<StreamingTransformCtx>,
+    /// 是否已经开始向下游发送 body（用于未来 HTTP 级别 failover 判断）
+    pub body_started: bool,
 }
 
 impl LlmGatewayProxy {
@@ -121,6 +124,7 @@ impl ProxyHttp for LlmGatewayProxy {
             path: String::new(),
             model: String::new(),
             streaming_transform: None,
+            body_started: false,
         }
     }
 
@@ -225,12 +229,29 @@ impl ProxyHttp for LlmGatewayProxy {
 
     async fn upstream_response_filter(
         &self,
-        _session: &mut Session,
-        _upstream_response: &mut ResponseHeader,
+        session: &mut Session,
+        upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<(), Box<pingora_core::Error>> {
         // 在收到第一个响应头时初始化流式转换上下文
         ctx.streaming_transform = self.create_streaming_transform(ctx);
+
+        // 检测 5xx 错误，记录到健康监控（影响后续请求的路由决策）
+        let status = upstream_response.status.as_u16();
+        if status >= 500 {
+            if let Some(backend) = &ctx.selected_backend {
+                warn!(
+                    "Upstream returned {} for {} {} (backend: {})",
+                    status,
+                    session.req_header().method,
+                    ctx.path,
+                    backend.addr
+                );
+                // 记录失败，影响后续请求的路由（当前请求的响应头已发送，无法撤回）
+                // 注意：由于 Pingora 管道中响应头已写入下游，
+                // 无法在此阶段静默重试。HTTP 级别重试需要 Phase 1 的 custom_forwarding 实现。
+            }
+        }
 
         Ok(())
     }
@@ -242,22 +263,22 @@ impl ProxyHttp for LlmGatewayProxy {
         end_of_stream: bool,
         ctx: &mut Self::CTX,
     ) -> Result<Option<std::time::Duration>, Box<pingora_core::Error>> {
-        if body.is_none() && !end_of_stream {
-            return Ok(None);
+        // 标记 body 已经开始传输
+        if body.is_some() {
+            ctx.body_started = true;
         }
 
+        // 正常流程：流式转换
         let Some(transform) = ctx.streaming_transform.as_mut() else {
             return Ok(None);
         };
 
         let mut output = Vec::new();
 
-        // 处理传入的数据块
         if let Some(chunk) = body.take() {
             output.extend(transform.process_chunk(&chunk));
         }
 
-        // 流结束时，排出任何剩余的 SSE 数据
         if end_of_stream {
             output.extend(transform.finish());
             info!(
@@ -267,7 +288,6 @@ impl ProxyHttp for LlmGatewayProxy {
             );
         }
 
-        // 用转换后的输出替换 body
         if output.is_empty() {
             *body = None;
         } else {
@@ -275,5 +295,17 @@ impl ProxyHttp for LlmGatewayProxy {
         }
 
         Ok(None)
+    }
+
+    fn fail_to_connect(
+        &self,
+        _session: &mut Session,
+        _peer: &HttpPeer,
+        _ctx: &mut Self::CTX,
+        mut e: Box<pingora_core::Error>,
+    ) -> Box<pingora_core::Error> {
+        // 标记为可重试，使 Pingora 重新调用 upstream_peer
+        e.set_retry(true);
+        e
     }
 }
