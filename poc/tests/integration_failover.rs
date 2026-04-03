@@ -24,9 +24,7 @@ async fn test_failover_on_backend_failure() {
         let response = client
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
             .header("Content-Type", "application/json")
-            .body(
-                r#"{"model":"test","messages":[{"role":"user","content":"hi"}]}"#,
-            )
+            .body(r#"{"model":"test","messages":[{"role":"user","content":"hi"}]}"#)
             .send()
             .await;
 

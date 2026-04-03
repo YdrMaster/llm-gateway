@@ -11,13 +11,12 @@ use crate::strategy::streaming_context::StreamingTransformCtx;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use http::StatusCode;
 use llm_gateway_protocols::Protocol;
 use log::{debug, error, info, warn};
 use pingora_core::upstreams::peer::HttpPeer;
-use pingora_core::Error;
-use pingora_proxy::{ProxyHttp, Session};
-use http::StatusCode;
 use pingora_http::ResponseHeader;
+use pingora_proxy::{ProxyHttp, Session};
 
 /// LLM Gateway 代理
 pub struct LlmGatewayProxy {
@@ -66,12 +65,11 @@ impl LlmGatewayProxy {
     /// 从请求体中提取模型名称
     fn extract_model(&self, body: &Option<Bytes>) -> String {
         // 尝试从请求体中读取模型
-        if let Some(body_bytes) = body {
-            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(body_bytes) {
-                if let Some(model) = json.get("model").and_then(|v| v.as_str()) {
-                    return model.to_string();
-                }
-            }
+        if let Some(body_bytes) = body
+            && let Ok(json) = serde_json::from_slice::<serde_json::Value>(body_bytes)
+            && let Some(model) = json.get("model").and_then(|v| v.as_str())
+        {
+            return model.to_string();
         }
 
         // 默认模型
@@ -81,7 +79,12 @@ impl LlmGatewayProxy {
     /// 根据选中的后端地址确定源协议
     fn detect_source_protocol(&self, ctx: &ProxyContext) -> Protocol {
         // 如果后端地址包含 "anthropic"，则认为是 Anthropic 协议
-        if ctx.selected_backend.as_ref().map(|b| b.addr.contains("anthropic")).unwrap_or(false) {
+        if ctx
+            .selected_backend
+            .as_ref()
+            .map(|b| b.addr.contains("anthropic"))
+            .unwrap_or(false)
+        {
             Protocol::Anthropic
         } else {
             // Mock 后端 A 和 B 返回 OpenAI 格式
@@ -137,7 +140,11 @@ impl ProxyHttp for LlmGatewayProxy {
     ) -> Result<(), Box<pingora_core::Error>> {
         // 记录请求路径
         ctx.path = session.req_header().uri.path().to_string();
-        debug!("Processing request: {} {}", session.req_header().method, ctx.path);
+        debug!(
+            "Processing request: {} {}",
+            session.req_header().method,
+            ctx.path
+        );
 
         // 提取模型名称（只在第一个 body chunk 处理）
         if ctx.model.is_empty() && body.is_some() {
@@ -154,7 +161,9 @@ impl ProxyHttp for LlmGatewayProxy {
                     warn!("Failed to acquire concurrency permit: {e}");
                     // 返回 503
                     let response = ResponseHeader::build(StatusCode::SERVICE_UNAVAILABLE, None)?;
-                    session.write_response_header(Box::new(response), true).await?;
+                    session
+                        .write_response_header(Box::new(response), true)
+                        .await?;
                     return Err(pingora_core::Error::new_str("Concurrency limit exceeded"));
                 }
             }
@@ -169,11 +178,8 @@ impl ProxyHttp for LlmGatewayProxy {
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>, Box<pingora_core::Error>> {
         // 创建路由上下文
-        let routing_ctx = RoutingContext::new(
-            ctx.model.clone(),
-            ctx.path.clone(),
-            "openai".to_string(),
-        );
+        let routing_ctx =
+            RoutingContext::new(ctx.model.clone(), ctx.path.clone(), "openai".to_string());
 
         // 执行策略链选择后端
         match self.strategy_chain.execute(&routing_ctx).await {
@@ -187,7 +193,9 @@ impl ProxyHttp for LlmGatewayProxy {
                 error!("Failed to select backend: {e}");
                 // 返回 503
                 let response = ResponseHeader::build(StatusCode::SERVICE_UNAVAILABLE, None)?;
-                session.write_response_header(Box::new(response), true).await?;
+                session
+                    .write_response_header(Box::new(response), true)
+                    .await?;
                 Err(pingora_core::Error::new_str("No available backend"))
             }
         }
@@ -238,19 +246,19 @@ impl ProxyHttp for LlmGatewayProxy {
 
         // 检测 5xx 错误，记录到健康监控（影响后续请求的路由决策）
         let status = upstream_response.status.as_u16();
-        if status >= 500 {
-            if let Some(backend) = &ctx.selected_backend {
-                warn!(
-                    "Upstream returned {} for {} {} (backend: {})",
-                    status,
-                    session.req_header().method,
-                    ctx.path,
-                    backend.addr
-                );
-                // 记录失败，影响后续请求的路由（当前请求的响应头已发送，无法撤回）
-                // 注意：由于 Pingora 管道中响应头已写入下游，
-                // 无法在此阶段静默重试。HTTP 级别重试需要 Phase 1 的 custom_forwarding 实现。
-            }
+        if status >= 500
+            && let Some(backend) = &ctx.selected_backend
+        {
+            warn!(
+                "Upstream returned {} for {} {} (backend: {})",
+                status,
+                session.req_header().method,
+                ctx.path,
+                backend.addr
+            );
+            // 记录失败，影响后续请求的路由（当前请求的响应头已发送，无法撤回）
+            // 注意：由于 Pingora 管道中响应头已写入下游，
+            // 无法在此阶段静默重试。HTTP 级别重试需要 Phase 1 的 custom_forwarding 实现。
         }
 
         Ok(())
@@ -283,8 +291,7 @@ impl ProxyHttp for LlmGatewayProxy {
             output.extend(transform.finish());
             info!(
                 "Streaming transform finished: {} → {}",
-                transform.source_protocol,
-                transform.target_protocol
+                transform.source_protocol, transform.target_protocol
             );
         }
 

@@ -15,12 +15,6 @@ pub struct ConcurrencyLimitLayer {
     default_limit: usize,
 }
 
-/// 并发上下文，持有许可
-pub struct ConcurrencyContext {
-    /// 持有的许可
-    pub permit: Option<OwnedSemaphorePermit>,
-}
-
 impl ConcurrencyLimitLayer {
     /// 创建新的并发限制层
     pub fn new(default_limit: usize) -> Self {
@@ -58,6 +52,7 @@ impl ConcurrencyLimitLayer {
     }
 
     /// 获取当前可用许可数
+    #[allow(dead_code)]
     pub fn available_permits(&self, model: &str) -> usize {
         self.get_semaphore(model).available_permits()
     }

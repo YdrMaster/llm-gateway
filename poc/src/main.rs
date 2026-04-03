@@ -17,7 +17,7 @@ use proxy::LlmGatewayProxy;
 use strategy::chain::ChainExecutor;
 use strategy::failover::FailoverStrategy;
 
-use log::{error, info, LevelFilter};
+use log::{LevelFilter, error, info};
 use pingora_core::server::Server;
 use pingora_core::server::configuration::ServerConf;
 use pingora_proxy::http_proxy_service;
@@ -99,10 +99,10 @@ fn main() {
     info!("Starting Pingora proxy server on port {proxy_port}...");
 
     // 创建服务器配置
-    let mut server_conf = ServerConf::default();
-    server_conf.daemon = false;
-
-    let server_conf_arc = Arc::new(server_conf);
+    let server_conf_arc = Arc::new(ServerConf {
+        daemon: false,
+        ..Default::default()
+    });
 
     // 创建 HTTP 代理服务并添加监听器
     let mut proxy_service = http_proxy_service(&server_conf_arc, proxy);
@@ -142,12 +142,16 @@ async fn mock_openai_backend_a(port: u16) {
                     let _ = socket.try_read(&mut buf).ok();
 
                     if rand::random::<bool>() {
-                        let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
+                        let response =
+                            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
                         let _ = socket.writable().await;
                         let _ = socket.try_write(response.as_bytes()).ok();
                         info!("Mock OpenAI-A: Returning 500 error");
                     } else {
-                        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
                         let response = format!(
                             "HTTP/1.1 200 OK\r\n\
                              Content-Type: text/event-stream\r\n\
@@ -244,14 +248,29 @@ async fn mock_anthropic_backend(port: u16) {
                         return;
                     }
 
-                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
                     let frames = vec![
-                        format!("event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg-{ts}\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-3\",\"content\":[]}}}}\n\n"),
-                        format!("event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n"),
-                        format!("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"Hello\"}}}}\n\n"),
-                        format!("event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\" from Claude\"}}}}\n\n"),
-                        format!("event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n"),
-                        format!("event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":4}}}}\n\n"),
+                        format!(
+                            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg-{ts}\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-3\",\"content\":[]}}}}\n\n"
+                        ),
+                        format!(
+                            "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n"
+                        ),
+                        format!(
+                            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"Hello\"}}}}\n\n"
+                        ),
+                        format!(
+                            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\" from Claude\"}}}}\n\n"
+                        ),
+                        format!(
+                            "event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n"
+                        ),
+                        format!(
+                            "event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":4}}}}\n\n"
+                        ),
                         "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_string(),
                     ];
 

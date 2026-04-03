@@ -9,15 +9,12 @@ use llm_gateway_protocols::{
 use log::debug;
 
 /// 协议转换中间件
-pub struct ProtocolConversionMiddleware {
-    /// 是否启用转换
-    enabled: bool,
-}
+pub struct ProtocolConversionMiddleware;
 
 impl ProtocolConversionMiddleware {
     /// 创建新的协议转换中间件
     pub fn new() -> Self {
-        Self { enabled: true }
+        Self
     }
 
     /// 创建转换器
@@ -43,6 +40,7 @@ impl ProtocolConversionMiddleware {
     }
 
     /// 处理 SSE 消息
+    #[allow(dead_code)]
     pub fn process_message(
         &self,
         converter: &mut Box<dyn StreamingCollector>,
@@ -52,6 +50,7 @@ impl ProtocolConversionMiddleware {
     }
 
     /// 检查是否需要转换
+    #[allow(dead_code)]
     pub fn needs_conversion(&self, from: Protocol, to: Protocol) -> bool {
         from != to
     }

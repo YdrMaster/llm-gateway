@@ -19,6 +19,7 @@ pub enum RoutingError {
     /// 后端连接失败
     BackendConnectionFailed(String),
     /// 健康检查失败
+    #[allow(dead_code)]
     HealthCheckFailed(String),
 }
 

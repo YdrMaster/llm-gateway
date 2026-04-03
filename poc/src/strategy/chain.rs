@@ -17,10 +17,13 @@ pub trait RoutingPlugin: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct RoutingContext {
     /// 模型名称
+    #[allow(dead_code)]
     pub model: String,
     /// 请求路径
+    #[allow(dead_code)]
     pub path: String,
-    /// 目标协议
+    /// 目标协议（预留）
+    #[allow(dead_code)]
     pub target_protocol: String,
 }
 
@@ -72,6 +75,7 @@ impl ChainExecutor {
     }
 
     /// 添加策略插件
+    #[allow(dead_code)]
     pub fn add_plugin(&mut self, plugin: Arc<dyn RoutingPlugin>) {
         self.plugins.push(plugin);
     }

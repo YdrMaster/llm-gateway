@@ -26,9 +26,7 @@ async fn test_sse_streaming_with_5xx_detection() {
         let response = client
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
             .header("Content-Type", "application/json")
-            .body(
-                r#"{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
-            )
+            .body(r#"{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}"#)
             .send()
             .await;
 
@@ -43,7 +41,10 @@ async fn test_sse_streaming_with_5xx_detection() {
     // 没有 HTTP 级别 failover 时，成功率约 50%
     // 这个测试主要验证流式转发和 5xx 检测日志
     eprintln!("SSE streaming test: {success_count}/{total_requests} succeeded");
-    assert!(success_count >= 3, "At least 3 should succeed (got {success_count})");
+    assert!(
+        success_count >= 3,
+        "At least 3 should succeed (got {success_count})"
+    );
 
     stop_proxy(child);
 }

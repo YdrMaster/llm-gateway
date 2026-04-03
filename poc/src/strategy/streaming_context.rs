@@ -1,7 +1,4 @@
-use llm_gateway_protocols::{
-    SseCollector,
-    streaming::StreamingCollector,
-};
+use llm_gateway_protocols::{SseCollector, streaming::StreamingCollector};
 
 /// 为单个请求持有增量 SSE 解析器和协议转换器。
 ///
@@ -12,8 +9,6 @@ pub struct StreamingTransformCtx {
     pub sse_collector: SseCollector,
     /// 协议转换器（如 AnthropicToOpenai）— 为 None 时表示直通
     pub converter: Option<Box<dyn StreamingCollector>>,
-    /// 尚未发送到下游的累积输出字节
-    pub output_buffer: Vec<u8>,
     /// 源协议（用于日志/调试）
     pub source_protocol: String,
     /// 目标协议
@@ -21,11 +16,14 @@ pub struct StreamingTransformCtx {
 }
 
 impl StreamingTransformCtx {
-    pub fn new(source: String, target: String, converter: Option<Box<dyn StreamingCollector>>) -> Self {
+    pub fn new(
+        source: String,
+        target: String,
+        converter: Option<Box<dyn StreamingCollector>>,
+    ) -> Self {
         Self {
             sse_collector: SseCollector::default(),
             converter,
-            output_buffer: Vec::new(),
             source_protocol: source,
             target_protocol: target,
         }

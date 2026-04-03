@@ -32,8 +32,10 @@ pub struct HealthCheckConfig {
     /// 失败阈值，超过此值标记为不健康
     pub failure_threshold: u32,
     /// 恢复阈值，连续成功次数后恢复健康
+    #[allow(dead_code)]
     pub recovery_threshold: u32,
     /// 健康检查超时
+    #[allow(dead_code)]
     pub check_timeout: Duration,
 }
 
@@ -66,11 +68,13 @@ impl BackendManager {
     }
 
     /// 获取所有后端
+    #[allow(dead_code)]
     pub async fn get_all_backends(&self) -> Vec<Backend> {
         self.backends.read().await.clone()
     }
 
     /// 获取健康的后端列表
+    #[allow(dead_code)]
     pub async fn get_healthy_backends(&self) -> Vec<Backend> {
         self.backends
             .read()
@@ -86,14 +90,14 @@ impl BackendManager {
         let mut backends = self.backends.write().await;
         if let Some(backend) = backends.iter_mut().find(|b| b.addr == addr) {
             backend.failure_count += 1;
-            if backend.failure_count >= self.health_check_config.failure_threshold {
-                if backend.healthy {
-                    backend.healthy = false;
-                    warn!(
-                        "Backend {addr} marked as unhealthy after {} failures",
-                        backend.failure_count
-                    );
-                }
+            if backend.failure_count >= self.health_check_config.failure_threshold
+                && backend.healthy
+            {
+                backend.healthy = false;
+                warn!(
+                    "Backend {addr} marked as unhealthy after {} failures",
+                    backend.failure_count
+                );
             }
             debug!("Backend {addr} failure count: {}", backend.failure_count);
         }
@@ -118,6 +122,7 @@ impl BackendManager {
     }
 
     /// 检查后端是否健康
+    #[allow(dead_code)]
     pub async fn is_healthy(&self, addr: &str) -> bool {
         self.backends
             .read()
@@ -129,6 +134,7 @@ impl BackendManager {
     }
 
     /// 获取后端失败次数
+    #[allow(dead_code)]
     pub async fn get_failure_count(&self, addr: &str) -> u32 {
         self.backends
             .read()

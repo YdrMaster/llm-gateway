@@ -24,9 +24,7 @@ async fn test_sse_streaming_passthrough() {
         let response = client
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
             .header("Content-Type", "application/json")
-            .body(
-                r#"{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
-            )
+            .body(r#"{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}"#)
             .send()
             .await;
 
@@ -67,9 +65,7 @@ async fn test_sse_stream_arrives_over_time() {
         let response = client
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
             .header("Content-Type", "application/json")
-            .body(
-                r#"{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
-            )
+            .body(r#"{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}"#)
             .send()
             .await;
 
