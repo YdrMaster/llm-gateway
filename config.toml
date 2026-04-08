@@ -7,33 +7,33 @@ models = ["qwen3.5-35b-a3b", "qwen3.5-122b-a10b"]
 "data/Qwen3.5-35B-A3B" = "qwen3.5-35b-a3b"
 "Qwen3.5-35B-A3B" = "qwen3.5-35b-a3b"
 "Qwen3.5-122B-A10B" = "qwen3.5-122b-a10b"
+# "gemma-4-31b-it" = "/nas/gemma-4-31B-it"
 
 # 输入节点
 [input.test]
-port = 8001
-models = ["qwen3.5-35b-a3b", "qwen3.5-122b-a10b", "qwen3.5-35b-a3b-no-mtp"]
+port = 8002
+models = ["qwen3.5-35b-a3b", "qwen3.5-122b-a10b", "sglang-qwen3.5-35b-a3b-h20"]
 
 # 模型节点，顺序尝试路由
 [node."qwen3.5-35b-a3b"]
-sequence = ["limit-sglang-qwen-35b", "aliyun"]
+sequence = ["aliyun"]
 
 # 模型节点，顺序尝试路由
 [node."qwen3.5-122b-a10b"]
-sequence = ["limit-sglang-qwen-122b", "aliyun"]
+sequence = ["sglang-qwen3.5-122b-a10b", "aliyun"]
 
-# 限流节点
-[node.limit-sglang-qwen-35b]
-concurrency = { max = 8, successor = "sglang-qwen3.5-35b-a3b" }
+# # 限流节点
+# [node.limit-sglang-qwen-35b]
+# concurrency = { max = 8, successor = "sglang-qwen3.5-35b-a3b" }
 
-# 限流节点
-[node.limit-sglang-qwen-122b]
-concurrency = { max = 8, successor = "sglang-qwen3.5-122b-a10b" }
+# # 限流节点
+# [node.limit-sglang-qwen-122b]
+# concurrency = { max = 8, successor = "sglang-qwen3.5-122b-a10b" }
 
 # 简单后端节点，它们只指定了 base-url，直接转发所有协议，不进行协议转换
 [backend]
-"sglang-qwen3.5-35b-a3b" = "http://172.17.250.163:30001"
-"sglang-qwen3.5-122b-a10b" = "http://172.17.250.163:30002"
-"qwen3.5-35b-a3b-no-mtp" = "http://172.17.250.163:30003"
+"sglang-qwen3.5-122b-a10b" = "http://172.17.250.184:30001"
+"qwen3.5-35b-a3b-h20" = "http://172.17.250.184:30002"
 
 # 后端节点
 [backend.aliyun]

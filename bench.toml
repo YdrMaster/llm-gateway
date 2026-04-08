@@ -1,0 +1,10 @@
+﻿[input.service]
+port = 8005
+models = [
+    "sglang-qwen3.5-122b-a10b-flashinfer",
+    "sglang-qwen3.5-35b-a3b-flashinfer",
+]
+
+[backend]
+"sglang-qwen3.5-122b-a10b-flashinfer" = "http://172.17.250.163:30001"
+"sglang-qwen3.5-35b-a3b-flashinfer" = "http://172.17.250.163:30002"
