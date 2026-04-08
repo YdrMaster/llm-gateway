@@ -17,7 +17,7 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioIo;
 use llm_gateway_protocols::streaming::{self, StreamingCollector};
-use llm_gateway_protocols::{Protocol, SseCollector, SseMessage, request};
+use llm_gateway_protocols::{Protocol, SseCollector, SseMessage, request, response};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -529,20 +529,34 @@ async fn forward_to_foreign(
         .body(Full::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
 
-    // 创建流式响应转换器
-    let converter: Box<dyn StreamingCollector> = match (protocol, backend.protocol) {
-        (Protocol::OpenAI, Protocol::Anthropic) => {
-            Box::new(streaming::AnthropicToOpenai::default())
-        }
-        (Protocol::Anthropic, Protocol::OpenAI) => {
-            Box::new(streaming::OpenaiToAnthropic::default())
-        }
-        (_, _) => unreachable!(),
-    };
-
     // 发送请求到后端
     match client.request(forward_req).await {
-        Ok(response) => Ok(forward_foreign_response(response, converter)),
+        Ok(response) => {
+            // 检查 Content-Type 判断是否流式
+            let content_type = response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            if content_type.contains("text/event-stream") {
+                // 流式响应:创建流式响应转换器
+                let converter: Box<dyn StreamingCollector> = match (protocol, backend.protocol) {
+                    (Protocol::OpenAI, Protocol::Anthropic) => {
+                        Box::new(streaming::AnthropicToOpenai::default())
+                    }
+                    (Protocol::Anthropic, Protocol::OpenAI) => {
+                        Box::new(streaming::OpenaiToAnthropic::default())
+                    }
+                    (_, _) => unreachable!(),
+                };
+                Ok(forward_foreign_streaming_response(response, converter))
+            } else {
+                // 非流式响应:收集完整 body 后转换
+                info!("Non-streaming response detected, converting to streaming format");
+                handle_non_streaming_response(response, protocol, backend.protocol).await
+            }
+        }
         Err(e) => {
             warn!("Failed to connect to backend (foreign protocol): {e}");
             Err(GatewayError::BackendRequestFailed(format!(
@@ -552,8 +566,8 @@ async fn forward_to_foreign(
     }
 }
 
-/// 使用 Stream 方式处理协议转换，错误时立即关闭流
-fn forward_foreign_response(
+/// 使用 Stream 方式处理协议转换（流式响应），错误时立即关闭流
+fn forward_foreign_streaming_response(
     response: Response<Incoming>,
     converter: Box<dyn StreamingCollector>,
 ) -> Response<BoxBody> {
@@ -565,8 +579,8 @@ fn forward_foreign_response(
     let data_stream = body.into_data_stream().map_err(std::io::Error::other);
 
     // 使用 Mutex 实现线程安全的内部可变性
-    let collector = Mutex::new(SseCollector::new());
-    let converter = Mutex::new(converter);
+    let collector = Arc::new(Mutex::new(SseCollector::new()));
+    let converter = Arc::new(Mutex::new(converter));
     let error_occurred = Arc::new(AtomicBool::new(false));
 
     // 创建处理流，错误时立即停止
@@ -579,6 +593,8 @@ fn forward_foreign_response(
             }
         })
         .map({
+            let collector = collector.clone();
+            let converter = converter.clone();
             let error_occurred = error_occurred.clone();
             move |result| match result {
                 Ok(bytes) => Ok(process_frame(
@@ -589,7 +605,53 @@ fn forward_foreign_response(
                 )),
                 Err(e) => Err(e),
             }
-        });
+        })
+        .chain(futures::stream::once(async move {
+            // 调用 finish() 处理缓冲区中剩余的 SSE 数据
+            let final_output = match collector.lock().unwrap().finish() {
+                Ok(Some(msg)) => {
+                    debug!("finish() returned message: {msg}");
+                    let mut converter = converter.lock().unwrap();
+                    match converter.process(msg) {
+                        Ok(out) => {
+                            let mut ans = String::new();
+                            for line in out {
+                                let _ = write!(ans, "{line}");
+                            }
+                            ans
+                        }
+                        Err(e) => {
+                            error!("Protocol conversion error in finish(): {e}");
+                            error_occurred.store(true, Ordering::Relaxed);
+                            let error_data = serde_json::json!({
+                                "error": {
+                                    "message": format!("Protocol conversion failed in finish(): {e}"),
+                                    "type": "protocol_conversion_error"
+                                }
+                            });
+                            SseMessage::new(&error_data).to_string()
+                        }
+                    }
+                }
+                Ok(None) => {
+                    debug!("finish() returned no message (buffer was empty or whitespace)");
+                    String::new()
+                }
+                Err(e) => {
+                    error!("SSE parsing error in finish(): {e}");
+                    error_occurred.store(true, Ordering::Relaxed);
+                    let error_data = serde_json::json!({
+                        "error": {
+                            "message": format!("SSE parsing failed in finish(): {e}"),
+                            "type": "sse_parsing_error"
+                        }
+                    });
+                    SseMessage::new(&error_data).to_string()
+                }
+            };
+            debug!("finish() output: {final_output}");
+            Ok(Frame::data(Bytes::from(final_output)))
+        }));
 
     // 将 Stream 转换回 Body
     let new_body = http_body_util::StreamBody::new(processed_stream);
@@ -598,11 +660,86 @@ fn forward_foreign_response(
     Response::from_parts(parts, BodyExt::boxed(new_body))
 }
 
+/// 处理非流式 JSON 响应，转换为客户端协议的格式
+async fn handle_non_streaming_response(
+    response: Response<Incoming>,
+    client_protocol: Protocol,
+    backend_protocol: Protocol,
+) -> Result<Response<BoxBody>, GatewayError> {
+    use http_body_util::BodyExt;
+
+    let (parts, body) = response.into_parts();
+
+    // 收集完整响应体
+    let body_bytes = body
+        .collect()
+        .await
+        .map_err(|e| GatewayError::BackendRequestFailed(format!("Failed to collect body: {e}")))?
+        .to_bytes();
+
+    // 解析 JSON
+    let json_body: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
+        GatewayError::BackendRequestFailed(format!("Invalid JSON response: {e}"))
+    })?;
+
+    debug!("Non-streaming backend response: {json_body}");
+
+    // 协议转换
+    let (converted_body, content_type) = match (client_protocol, backend_protocol) {
+        (Protocol::OpenAI, Protocol::Anthropic) => {
+            // Anthropic 非流式 -> OpenAI 非流式
+            let openai_response = response::anthropic_to_openai(json_body).map_err(|e| {
+                GatewayError::BackendRequestFailed(format!(
+                    "Anthropic to OpenAI conversion failed: {e}"
+                ))
+            })?;
+
+            (openai_response.to_string(), "application/json")
+        }
+        (Protocol::Anthropic, Protocol::OpenAI) => {
+            // OpenAI 非流式 -> Anthropic 非流式
+            let anthropic_response = response::openai_to_anthropic(json_body).map_err(|e| {
+                GatewayError::BackendRequestFailed(format!(
+                    "OpenAI to Anthropic conversion failed: {e}"
+                ))
+            })?;
+
+            (anthropic_response.to_string(), "application/json")
+        }
+        (_, _) => unreachable!(),
+    };
+
+    // 构建响应
+    let mut response_builder = Response::builder().status(StatusCode::OK);
+
+    // 复制原始 headers（除了 Content-Type 和 Content-Length）
+    for (name, value) in parts.headers {
+        if let Some(name) = name
+            && name != CONTENT_TYPE
+            && name != CONTENT_LENGTH
+        {
+            response_builder = response_builder.header(name, value);
+        }
+    }
+
+    // 设置 Content-Type
+    response_builder = response_builder.header(CONTENT_TYPE, content_type);
+
+    Ok(response_builder
+        .body(
+            Full::<Bytes>::from(converted_body)
+                .map_err(std::io::Error::other)
+                .map_err(GatewayError::IoError)
+                .boxed(),
+        )
+        .unwrap())
+}
+
 /// 处理单个 SSE 数据帧，返回转换后的 SSE 格式输出
 fn process_frame(
     bytes: &Bytes,
-    collector: &Mutex<SseCollector>,
-    converter: &Mutex<Box<dyn StreamingCollector>>,
+    collector: &Arc<Mutex<SseCollector>>,
+    converter: &Arc<Mutex<Box<dyn StreamingCollector>>>,
     error_occurred: &AtomicBool,
 ) -> Frame<Bytes> {
     let ans = match collector.lock().unwrap().collect(bytes) {
