@@ -27,9 +27,31 @@ use std::pin::Pin;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{fmt::Write, sync::Arc};
 use tokio::net::TcpListener;
+
+/// 默认连接超时（毫秒）
+pub(crate) const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 500;
+
+/// 创建带指定连接超时的 HTTPS 客户端
+pub(crate) fn create_client(connect_timeout_ms: u64) -> HttpsClient {
+    let mut http_connector = HttpConnector::new();
+    http_connector.set_connect_timeout(Some(Duration::from_millis(connect_timeout_ms)));
+    http_connector.set_nodelay(true);
+    http_connector.enforce_http(false);
+
+    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .unwrap()
+        .https_or_http()
+        .enable_http1()
+        .wrap_connector(http_connector);
+
+    Client::builder(hyper_util::rt::TokioExecutor::new())
+        .pool_max_idle_per_host(32)
+        .build(https_connector)
+}
 
 /// 持有 nodes 的 Body 包装器，确保 nodes 在 body 流式传输完成后才释放
 ///
@@ -80,7 +102,6 @@ pub async fn serve(
 ) -> Result<(), GatewayError> {
     let addr = SocketAddr::from(([0, 0, 0, 0], input_node.port()));
     let listener = TcpListener::bind(addr).await?;
-    let client = client();
 
     info!("Listening on {addr}");
 
@@ -89,15 +110,13 @@ pub async fn serve(
         info!("Accepted connection from {remote_addr}");
 
         let node = input_node.clone();
-        let client = client.clone();
         let stats = stats.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
             let service = service_fn(move |req| {
                 let node = node.clone();
-                let client = client.clone();
                 let stats = stats.clone();
-                async move { handle_request(remote_addr, req, &node, client, stats).await }
+                async move { handle_request(remote_addr, req, &node, stats).await }
             });
 
             if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
@@ -105,27 +124,6 @@ pub async fn serve(
             }
         });
     }
-}
-
-/// 创建 HTTPS 客户端
-///
-/// 配置支持 HTTP 和 HTTPS 的连接器
-fn client() -> HttpsClient {
-    // 创建支持 HTTP 和 HTTPS 的连接器
-    let mut http_connector = HttpConnector::new();
-    http_connector.set_nodelay(true);
-    http_connector.enforce_http(false);
-
-    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_native_roots()
-        .unwrap()
-        .https_or_http()
-        .enable_http1()
-        .wrap_connector(http_connector);
-
-    Client::builder(hyper_util::rt::TokioExecutor::new())
-        .pool_max_idle_per_host(32)
-        .build(https_connector)
 }
 
 /// 解析环境变量引用
@@ -159,7 +157,6 @@ async fn handle_request(
     remote_addr: SocketAddr,
     req: Request<hyper::body::Incoming>,
     input_node: &Arc<InputNode>,
-    client: HttpsClient,
     stats: Option<Arc<StatsStoreManager>>,
 ) -> Result<Response<BoxBody>, GatewayError> {
     // 处理 /v1/models 端点 (GET only)
@@ -200,7 +197,7 @@ async fn handle_request(
                 let model_name = route.model_name().to_string();
                 let backend_name = route.backend_name().to_string();
 
-                match handle_route_success(payload.clone(), route, client.clone()).await {
+                match handle_route_success(payload.clone(), route).await {
                     Ok(response) => {
                         // 记录成功事件
                         if let Some(stats) = &stats {
@@ -291,7 +288,6 @@ async fn handle_request(
 async fn handle_route_success(
     payload: RoutePayload,
     route: Route,
-    client: HttpsClient,
 ) -> Result<Response<BoxBody>, GatewayError> {
     let Route {
         guards: nodes,
@@ -299,9 +295,9 @@ async fn handle_route_success(
         ..
     } = route;
     let result = if payload.protocol() == backend.protocol {
-        forward_to_backend(payload, &backend, client).await
+        forward_to_backend(payload, &backend).await
     } else {
-        forward_to_foreign(payload, &backend, client).await
+        forward_to_foreign(payload, &backend).await
     };
     if let Some(health) = nodes.first().and_then(|node| node.node().health()) {
         match &result {
@@ -396,7 +392,6 @@ const ANTHROPIC_VERSION: HeaderName = HeaderName::from_static("anthropic-version
 async fn forward_to_backend(
     payload: RoutePayload,
     backend: &Backend,
-    client: HttpsClient,
 ) -> Result<Response<BoxBody>, GatewayError> {
     // 重建 URI
     let uri = format!("{}{}", backend.base_url, payload.parts.uri.path())
@@ -448,7 +443,7 @@ async fn forward_to_backend(
         .unwrap();
 
     // 发送请求到后端
-    match client.request(forward_req).await {
+    match backend.client.request(forward_req).await {
         Ok(response) => {
             let (parts, body) = response.into_parts();
             // 流式转发后端响应体
@@ -472,7 +467,6 @@ async fn forward_to_backend(
 async fn forward_to_foreign(
     payload: RoutePayload,
     backend: &Backend,
-    client: HttpsClient,
 ) -> Result<Response<BoxBody>, GatewayError> {
     let protocol = payload.protocol();
     info!("forward to foreign: {protocol:?} -> {:?}", backend.protocol);
@@ -530,7 +524,7 @@ async fn forward_to_foreign(
         .unwrap();
 
     // 发送请求到后端
-    match client.request(forward_req).await {
+    match backend.client.request(forward_req).await {
         Ok(response) => {
             // 检查 Content-Type 判断是否流式
             let content_type = response
@@ -678,9 +672,8 @@ async fn handle_non_streaming_response(
         .to_bytes();
 
     // 解析 JSON
-    let json_body: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|e| {
-        GatewayError::BackendRequestFailed(format!("Invalid JSON response: {e}"))
-    })?;
+    let json_body: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| GatewayError::BackendRequestFailed(format!("Invalid JSON response: {e}")))?;
 
     debug!("Non-streaming backend response: {json_body}");
 

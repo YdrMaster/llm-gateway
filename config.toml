@@ -7,12 +7,6 @@ models = ["qwen3.5-35b-a3b", "qwen3.5-122b-a10b"]
 "data/Qwen3.5-35B-A3B" = "qwen3.5-35b-a3b"
 "Qwen3.5-35B-A3B" = "qwen3.5-35b-a3b"
 "Qwen3.5-122B-A10B" = "qwen3.5-122b-a10b"
-# "gemma-4-31b-it" = "/nas/gemma-4-31B-it"
-
-# 输入节点
-[input.test]
-port = 8002
-models = ["qwen3.5-35b-a3b", "qwen3.5-122b-a10b", "sglang-qwen3.5-35b-a3b-h20"]
 
 # 模型节点，顺序尝试路由
 [node."qwen3.5-35b-a3b"]
@@ -20,7 +14,7 @@ sequence = ["aliyun"]
 
 # 模型节点，顺序尝试路由
 [node."qwen3.5-122b-a10b"]
-sequence = ["sglang-qwen3.5-122b-a10b", "aliyun"]
+sequence = ["aliyun"]
 
 # # 限流节点
 # [node.limit-sglang-qwen-35b]

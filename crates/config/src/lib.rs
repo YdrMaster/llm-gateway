@@ -276,6 +276,7 @@ impl FromStr for GatewayConfig {
                         Node::Backend(BackendNode {
                             base_url,
                             api_key: None,
+                            connect_timeout_ms: None,
                         }),
                     );
                     continue;
@@ -315,9 +316,19 @@ impl FromStr for GatewayConfig {
                         .and_then(|v| v.as_str())
                         .map(String::from);
 
+                    // 解析 connect-timeout-ms 字段（可选）
+                    let connect_timeout_ms = backend_config
+                        .get("connect-timeout-ms")
+                        .and_then(|v| v.as_integer())
+                        .map(|v| v as u64);
+
                     nodes.insert(
                         name.clone(),
-                        Node::Backend(BackendNode { base_url, api_key }),
+                        Node::Backend(BackendNode {
+                            base_url,
+                            api_key,
+                            connect_timeout_ms,
+                        }),
                     );
                 }
             }
@@ -820,5 +831,34 @@ models = ["test-model"]
         let config = GatewayConfig::from_str(toml_str).expect("Failed to parse config");
 
         assert!(config.admin.is_none());
+    }
+
+    /// 测试后端节点连接超时配置解析
+    #[test]
+    fn test_parse_backend_connect_timeout() {
+        let toml_str = r#"
+[backend.test-backend]
+base-url = "http://localhost:8001"
+connect-timeout-ms = 1500
+"#;
+        let config = GatewayConfig::from_str(toml_str).unwrap();
+        match &config.nodes["test-backend"] {
+            Node::Backend(backend) => assert_eq!(backend.connect_timeout_ms, Some(1500)),
+            _ => panic!("Expected Backend node"),
+        }
+    }
+
+    /// 测试后端节点默认超时值（未指定时为 None）
+    #[test]
+    fn test_parse_backend_timeout_defaults() {
+        let toml_str = r#"
+[backend.test-backend]
+base-url = "http://localhost:8001"
+"#;
+        let config = GatewayConfig::from_str(toml_str).unwrap();
+        match &config.nodes["test-backend"] {
+            Node::Backend(backend) => assert_eq!(backend.connect_timeout_ms, None),
+            _ => panic!("Expected Backend node"),
+        }
     }
 }

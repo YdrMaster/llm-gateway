@@ -28,14 +28,23 @@ pub use llm_gateway_statistics::{
 use backend_node::BackendNode;
 use health_monitor::HealthMonitor;
 use http::{Request, request};
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
+use hyper_rustls::HttpsConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use llm_gateway_config::{GatewayConfig, HealthConfig, VirtualNode};
 use llm_gateway_protocols::Protocol;
 use sequence_node::SequenceNode;
 use serde_json::Value as Json;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use bytes::Bytes;
+use serve::{DEFAULT_CONNECT_TIMEOUT_MS, create_client};
+
+/// HTTPS 客户端的类型别名
+pub(crate) type HttpsClient = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
 
 /// 路由负载 - 在路由图中流动的请求上下文
 #[derive(Clone)]
@@ -119,6 +128,8 @@ pub struct Backend {
     base_url: String,
     /// API 密钥（可选）
     api_key: Option<String>,
+    /// 独立的 HTTP 客户端（带连接超时）
+    client: HttpsClient,
 }
 
 /// 路由错误类型
@@ -235,6 +246,8 @@ pub fn build(config: &GatewayConfig) -> Vec<Arc<InputNode>> {
             },
             ConfigNode::Backend(n) => {
                 // 为后端节点创建健康监控器
+                let connect_timeout_ms = n.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS);
+                let client = create_client(connect_timeout_ms);
                 nodes.insert(
                     &**name,
                     Arc::new(BackendNode::new(
@@ -242,6 +255,7 @@ pub fn build(config: &GatewayConfig) -> Vec<Arc<InputNode>> {
                         n.base_url.clone(),
                         n.api_key.clone(),
                         Arc::new(HealthMonitor::new(health_config.clone())),
+                        client,
                     )) as _,
                 );
             }

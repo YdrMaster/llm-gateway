@@ -13,12 +13,16 @@ use std::collections::HashMap;
 ///
 /// * `base_url` - 基础 URL 配置，支持多协议映射
 /// * `api_key` - 可选的 API Key，用于替换请求中的密钥
+/// * `connect_timeout_ms` - 连接超时（毫秒），默认 500
+/// * `request_timeout_ms` - 请求超时（毫秒），预留字段本次不使用
 #[derive(Clone, Debug)]
 pub struct BackendNode {
     /// 基础 URL 配置
     pub base_url: BaseUrl,
     /// 可选的 API Key
     pub api_key: Option<String>,
+    /// 连接超时（毫秒），默认 500
+    pub connect_timeout_ms: Option<u64>,
 }
 
 /// 基础 URL 配置

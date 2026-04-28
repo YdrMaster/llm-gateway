@@ -1,7 +1,7 @@
 //! 后端节点
 
 use crate::{
-    Backend, Node, Route, RouteError, RoutePayload, RouteResult, SimpleGuard,
+    Backend, HttpsClient, Node, Route, RouteError, RoutePayload, RouteResult, SimpleGuard,
     health_monitor::HealthMonitor,
 };
 use llm_gateway_config::{BaseUrl, UrlResult};
@@ -16,6 +16,7 @@ struct Internal {
     base_url: BaseUrl,
     api_key: Option<String>,
     health: Arc<HealthMonitor>,
+    client: HttpsClient,
 }
 
 impl Node for BackendNode {
@@ -37,6 +38,7 @@ impl Node for BackendNode {
                     protocol,
                     base_url: url.into(),
                     api_key: self.0.api_key.clone(),
+                    client: self.0.client.clone(),
                 },
             }),
             UrlResult::Foreign(protocol, url) => Ok(Route {
@@ -49,6 +51,7 @@ impl Node for BackendNode {
                     },
                     base_url: url.into(),
                     api_key: self.0.api_key.clone(),
+                    client: self.0.client.clone(),
                 },
             }),
             UrlResult::Empty => Err(RouteError::NoAvailable),
@@ -69,12 +72,14 @@ impl BackendNode {
         base_url: BaseUrl,
         api_key: Option<String>,
         health: Arc<HealthMonitor>,
+        client: HttpsClient,
     ) -> Self {
         Self(Arc::new(Internal {
             name,
             base_url,
             api_key,
             health,
+            client,
         }))
     }
 }
